@@ -28,6 +28,9 @@ nav button.on{color:var(--acc);font-weight:600}
 .row.hi{background:rgba(251,191,36,.12);border-radius:6px}
 .row.hi .e{color:var(--warn);font-weight:700}
 .sub.warn{color:var(--warn)}
+.ev-best{color:var(--ok);font-weight:700}
+.my table{font-size:13px;margin-top:6px}
+.my .g3 input{padding:6px 8px}
 .bar{position:relative;height:8px;background:#0f172a;border-radius:4px}
 .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--acc);border-radius:4px}
 .bar u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--warn)}
@@ -161,7 +164,7 @@ function backtest(ms,from,half,thr,minPrior=100,w=0,lam=1,rho=0){return btEval(b
 /* ---------- UI ---------- */
 const LG={E0:'Anglia – Premier League',E1:'Anglia – Championship',E2:'Anglia – League One',E3:'Anglia – League Two',SC0:'Szkocja – Premiership',D1:'Niemcy – Bundesliga',D2:'Niemcy – 2. Bundesliga',I1:'Włochy – Serie A',I2:'Włochy – Serie B',SP1:'Hiszpania – La Liga',SP2:'Hiszpania – La Liga 2',F1:'Francja – Ligue 1',F2:'Francja – Ligue 2',N1:'Holandia – Eredivisie',B1:'Belgia – Pro League',P1:'Portugalia – Liga',T1:'Turcja – Süper Lig',G1:'Grecja – Super League'};
 const BASE='https://www.football-data.co.uk/';
-const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,lam:1,rho:0,proxyOnly:false,div:'E0'};
+const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,lam:1,rho:0,bk:'STS',proxyOnly:false,div:'E0'};
 let S=Object.assign({},DEF);
 try{Object.assign(S,JSON.parse(localStorage.getItem('typer')||'{}'));}catch(e){}
 const save=()=>{try{localStorage.setItem('typer',JSON.stringify(S));}catch(e){}};
@@ -237,6 +240,20 @@ function mixLine(P,Q,odds){
   return `<br>Miks z rynkiem (waga ${Math.round(S.w*100)}%): `+['1','X','2'].map((l,i)=>{const e=(B[i]*odds[i]-1)*100;return `${l} ${pc(B[i])} (edge ${e>=0?'+':''}${e.toFixed(0)}%)`;}).join(' · ');
 }
 
+const keyOf=f=>`${f.div}|${f.d.toISOString().slice(0,10)}|${f.h}|${f.a}`;
+function getMy(){if(mem.my)return mem.my;try{mem.my=JSON.parse(localStorage.getItem('typer_my')||'{}');}catch(e){mem.my={};}return mem.my;}
+function setMy(k,v){const m=getMy();m[k]=v;const ks=Object.keys(m);if(ks.length>300)ks.slice(0,ks.length-300).forEach(x=>delete m[x]);try{localStorage.setItem('typer_my',JSON.stringify(m));}catch(e){}}
+const parseOdds=v=>{const o=v.map(x=>num(String(x).replace(',','.')));return o.every(x=>x&&x>1)?o:null;};
+function myHtml(f,odds){
+  if(!odds||!f.avg)return '<div class="sub">Wpisz trzy kursy, żeby porównać cenę z rynkiem.</div>';
+  const Q=imp(f.avg),ev=odds.map((o,i)=>o*Q[i]-1),bi=ev.indexOf(Math.max(...ev));
+  const mB=(odds.reduce((s,o)=>s+1/o,0)-1)*100,mM=(f.avg.reduce((s,o)=>s+1/o,0)-1)*100;
+  const pcn=x=>(x>=0?'+':'')+(x*100).toFixed(1)+'%',bk=esc(S.bk);
+  return `<table><tr><th>Typ</th><th>${bk}</th><th>Rynek śr.</th><th>Najlepszy</th><th>EV*</th></tr>`+
+  ['1','X','2'].map((l,i)=>`<tr><td>${l}</td><td>${odds[i].toFixed(2)}</td><td>${f.avg[i].toFixed(2)}</td><td>${f.max?f.max[i].toFixed(2):'–'}</td><td class="${i==bi?'ev-best':''}">${pcn(ev[i])}</td></tr>`).join('')+
+  `</table><div class="sub">Marża ${bk}: ${mB.toFixed(1)}% · marża rynku (śr.): ${mM.toFixed(1)}%${f.max?' · najlepsze kursy z rynku (każdy typ u innego bukmachera): marża '+((f.max.reduce((s,o)=>s+1/o,0)-1)*100).toFixed(1)+'%':''}<br>*EV = kurs × uczciwe prawdopodobieństwo (kursy średnie bez marży) − 1. Zwykle ujemne, bo to koszt marży. Im bliżej zera, tym lepsza cena. Nie mówi nic o tym, kto wygra.</div>`;
+}
+
 function card(f,R){
   const p=pr(R,f.h,f.a),P=[p.pH,p.pD,p.pA],Q=f.avg?imp(f.avg):null;
   const dt=f.d.toLocaleString('pl-PL',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Warsaw'});
@@ -246,7 +263,13 @@ function card(f,R){
   const warn=maxDiff(p,Q)>=S.thrPP?`<div class="sub warn">⚠ Duża różnica z rynkiem (≥ ${S.thrPP} p.p.) – sprawdź skład, kontuzje i rotację przed decyzją.</div>`:'';
   return `<div class="card"><div class="hd"><span>${dt}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>
   <div class="teams">${esc(f.h)} – ${esc(f.a)}</div>${rowsHtml(P,f.avg,Q)}
-  <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)}${ou}${mixLine(P,Q,f.avg)}</div>${warn}</div>`;
+  <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)}${ou}${mixLine(P,Q,f.avg)}</div>${warn}${f.avg?myBlock(f):''}</div>`;
+}
+function myBlock(f){
+  const k=keyOf(f),v=getMy()[k]||['','',''];
+  return `<div class="my"><div class="sub" style="margin-top:8px">Kursy ${esc(S.bk)} dla tego meczu (wpisz i porównaj cenę z rynkiem):</div>
+  <div class="g3">${[0,1,2].map(i=>`<input class="mi" data-key="${esc(k)}" data-i="${i}" inputmode="decimal" placeholder="${['1','X','2'][i]}" value="${esc(v[i]||'')}">`).join('')}</div>
+  <div class="myres">${myHtml(f,parseOdds(v))}</div></div>`;
 }
 
 async function view(){
@@ -272,6 +295,11 @@ function fixtures(d){
   (fx.length?fx.map(f=>card(f,d.R)).join(''):'<p class="mut">Brak nadchodzących meczów w fixtures.csv dla tej ligi (przerwa reprezentacyjna / koniec sezonu). Użyj zakładki „Własny mecz”.</p>')+
   '<div class="foot">Model statystyczny – nie gwarancja wyniku. Graj odpowiedzialnie.</div>';
   document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{sortBy=b.dataset.s;fixtures(d);});
+  const fm={};fx.forEach(f=>fm[keyOf(f)]=f);
+  document.querySelectorAll('.my').forEach(box=>{
+    const ins=[...box.querySelectorAll('input.mi')],k=ins[0].dataset.key;
+    ins.forEach(inp=>inp.oninput=()=>{const v=ins.map(x=>x.value);setMy(k,v);box.querySelector('.myres').innerHTML=myHtml(fm[k],parseOdds(v));});
+  });
 }
 
 function custom(d){
@@ -286,7 +314,7 @@ function custom(d){
     const odds=o.every(x=>x&&x>1)?o:null,Q=odds?imp(odds):null;
     const warn=maxDiff(p,Q)>=S.thrPP?`<div class="sub warn">⚠ Duża różnica z rynkiem (≥ ${S.thrPP} p.p.) – sprawdź skład, kontuzje i rotację przed decyzją.</div>`:'';
     $('co').innerHTML=`<div class="card"><div class="hd"><span>Teren: ${esc(h)}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>${rowsHtml(P,odds,Q)}
-    <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)} · Over 2.5 ${pc(p.o25)} · Under 2.5 ${pc(1-p.o25)}${mixLine(P,Q,odds)}</div>${warn}</div>`;
+    <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)} · Over 2.5 ${pc(p.o25)} · Under 2.5 ${pc(1-p.o25)}${mixLine(P,Q,odds)}${odds?`<br>Marża ${esc(S.bk)}: ${((odds.reduce((s,o)=>s+1/o,0)-1)*100).toFixed(1)}%`:''}</div>${warn}</div>`;
   };
   ['ch','ca','o1','o2','o3'].forEach(id=>$(id).oninput=go);go();
 }
@@ -376,6 +404,7 @@ async function bt(d){
 function settings(){
   $('v').innerHTML=`<div class="card"><label>Proxy CORS (prefiks, URL doklejany na końcu)</label><input id="sp" value="${esc(S.proxy)}" placeholder="https://twoj-worker.workers.dev/?url=">
   <label><input type="checkbox" id="spo" ${S.proxyOnly?'checked':''} style="width:auto"> Zawsze używaj proxy (pomiń próbę bezpośrednią)</label>
+  <label>Nazwa bukmachera (etykieta w porównaniu kursów)</label><input id="sbk" value="${esc(S.bk)}" maxlength="20">
   <div class="g2"><div><label>Waga rynku w miksie (0–1)</label><input id="sw" inputmode="decimal" value="${S.w}"></div><div><label>Podświetl różnicę z rynkiem od (p.p.)</label><input id="sdp" type="number" step="1" value="${S.thrPP}"></div></div>
   <div class="g2"><div><label>Okres połowicznego zaniku wagi (dni)</label><input id="sh" type="number" value="${S.half}"></div><div><label>Próg edge w symulacji backtestu (%)</label><input id="st" type="number" step="0.5" value="${S.thr}"></div></div>
   <div class="g2"><div><label>Udział goli w ocenie drużyn (1 = tylko gole, 0 = tylko strzały)</label><input id="sl" inputmode="decimal" value="${S.lam}"></div><div><label>Korekta Dixon-Coles ρ (0 do −0,2)</label><input id="sr" inputmode="decimal" value="${S.rho}"></div></div>
@@ -383,7 +412,7 @@ function settings(){
   <div class="card"><div class="teams">Wgraj CSV ręcznie</div><p class="mut" style="margin-top:0">Gdy proxy nie działa: pobierz pliki z football-data.co.uk (sezon + fixtures.csv) i wskaż je tutaj. Mecze z wynikiem trafiają do modelu, bez wyniku – do listy nadchodzących.</p>
   <input type="file" id="sf" accept=".csv" multiple><p class="mut" id="sfm"></p>${mem.manual?'<button id="sx">Wróć do pobierania z sieci</button>':''}</div>`;
   $('ss').onclick=()=>{
-    S.proxy=$('sp').value.trim();S.proxyOnly=$('spo').checked;
+    S.proxy=$('sp').value.trim();S.proxyOnly=$('spo').checked;S.bk=($('sbk').value.trim()||DEF.bk).slice(0,20);
     const w=parseFloat($('sw').value.replace(',','.'));S.w=isFinite(w)?Math.min(1,Math.max(0,w)):DEF.w;
     S.thrPP=Math.max(1,+$('sdp').value||DEF.thrPP);
     S.half=Math.max(30,+$('sh').value||DEF.half);S.thr=+$('st').value||DEF.thr;
