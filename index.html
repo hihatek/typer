@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Typer</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--line:#334155;--tx:#e2e8f0;--mut:#94a3b8;--acc:#38bdf8;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+select,input,button,textarea{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+select{flex:1;min-width:0}
+button{cursor:pointer}
+button.p{background:var(--acc);color:#04283b;border-color:var(--acc);font-weight:600}
+main{padding:12px;max-width:640px;margin:0 auto}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#0b1220;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;border-radius:0;background:none;color:var(--mut);padding:14px 4px;font-size:13px}
+nav button.on{color:var(--acc);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.hd{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin-bottom:4px}
+.teams{font-weight:600;margin-bottom:8px}
+.cols,.row{display:grid;grid-template-columns:18px 1fr 42px 42px 42px 42px;gap:6px;align-items:center;font-size:13px}
+.cols{color:var(--mut);font-size:11px;margin-bottom:2px}
+.cols span,.row span{text-align:right}
+.row{margin:3px 0;padding:2px 0}
+.row.val{background:rgba(74,222,128,.12);border-radius:6px}
+.row.val .e{color:var(--ok);font-weight:700}
+.row .e.neg{color:var(--bad)}
+.bar{position:relative;height:8px;background:#0f172a;border-radius:4px}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--acc);border-radius:4px}
+.bar u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--warn)}
+.m{color:var(--warn)}
+.sub{color:var(--mut);font-size:12px;margin-top:6px}
+.chips{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.chips button{padding:6px 12px;border-radius:99px;font-size:13px}
+.chips button.on{background:var(--acc);color:#04283b;border-color:var(--acc)}
+.err{color:var(--bad)}
+.mut{color:var(--mut)}
+label{display:block;color:var(--mut);font-size:12px;margin:10px 0 4px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+input{width:100%}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:6px 4px;text-align:right;border-bottom:1px solid var(--line)}
+td:first-child,th:first-child{text-align:left}
+.foot{color:var(--mut);font-size:11px;text-align:center;margin:18px 0}
+</style>
+</head>
+<body>
+<header>
+  <select id="lg"></select>
+  <button id="rf" class="p">Odśwież</button>
+</header>
+<main id="v"></main>
+<nav id="nav">
+  <button data-t="fx" class="on">Mecze</button>
+  <button data-t="cu">Własny mecz</button>
+  <button data-t="bt">Backtest</button>
+  <button data-t="st">Ustawienia</button>
+</nav>
+
+<script>
+//CORE_START
+const pad=n=>String(n).padStart(2,'0');
+function seasonCode(off=0){const n=new Date();let s=n.getMonth()>=6?n.getFullYear():n.getFullYear()-1;s+=off;return pad(s%100)+pad((s+1)%100);}
+function parseCSV(t){
+  t=t.replace(/^\uFEFF/,'');
+  const lines=t.split(/\r?\n/).filter(l=>l.trim());if(!lines.length)return[];
+  const split=l=>{const o=[];let c='',q=false;for(const ch of l){if(ch=='"')q=!q;else if(ch==','&&!q){o.push(c);c='';}else c+=ch;}o.push(c);return o;};
+  const h=split(lines[0]).map(x=>x.trim());
+  return lines.slice(1).map(l=>{const v=split(l),o={};h.forEach((k,i)=>o[k]=(v[i]||'').trim());return o;});
+}
+function pDate(s,tm){
+  const m=/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s||'');if(!m)return null;
+  let y=+m[3];if(y<100)y+=2000;
+  const p=(tm||'').split(':');
+  return new Date(Date.UTC(y,+m[2]-1,+m[1],+(p[0]||12),+(p[1]||0)));
+}
+const num=x=>{const v=parseFloat(x);return isFinite(v)?v:null;};
+function norm(r){
+  const d=pDate(r.Date,r.Time);if(!d||!r.HomeTeam||!r.AwayTeam)return null;
+  const o=(a,b,c)=>{const x=[num(r[a]),num(r[b]),num(r[c])];return x.every(v=>v!==null&&v>1)?x:null;};
+  return {div:r.Div,d,h:r.HomeTeam,a:r.AwayTeam,hg:num(r.FTHG),ag:num(r.FTAG),
+    avg:o('AvgH','AvgD','AvgA')||o('B365H','B365D','B365A'),
+    avgc:o('AvgCH','AvgCD','AvgCA')||o('PSCH','PSCD','PSCA'),
+    max:o('MaxH','MaxD','MaxA'),
+    ov:num(r['Avg>2.5'])||num(r['B365>2.5']),un:num(r['Avg<2.5'])||num(r['B365<2.5'])};
+}
+function ratings(ms,asOf,half){
+  let sw=0,sh=0,sa=0;const T={};
+  for(const m of ms){
+    if(m.hg===null||m.d>=asOf)continue;
+    const w=Math.pow(0.5,((asOf-m.d)/864e5)/half);
+    sw+=w;sh+=w*m.hg;sa+=w*m.ag;
+    const H=T[m.h]||(T[m.h]={gf:0,ga:0,w:0}),A=T[m.a]||(T[m.a]={gf:0,ga:0,w:0});
+    H.gf+=w*m.hg;H.ga+=w*m.ag;H.w+=w;A.gf+=w*m.ag;A.ga+=w*m.hg;A.w+=w;
+  }
+  if(sw<5)return null;
+  const hAvg=sh/sw,aAvg=sa/sw,mu=(hAvg+aAvg)/2,h=Math.sqrt(hAvg/aAvg),K=6;
+  for(const t in T){T[t].att=((T[t].gf+K*mu)/(T[t].w+K))/mu;T[t].def=((T[t].ga+K*mu)/(T[t].w+K))/mu;}
+  return {T,mu,h,hAvg,aAvg};
+}
+function pmf(l,n=10){const p=[Math.exp(-l)];for(let k=1;k<=n;k++)p.push(p[k-1]*l/k);return p;}
+function predict(R,h,a){
+  const th=R.T[h]||{att:1,def:1},ta=R.T[a]||{att:1,def:1};
+  const lh=R.mu*R.h*th.att*ta.def,la=R.mu/R.h*ta.att*th.def;
+  const ph=pmf(lh),pa=pmf(la);let H=0,D=0,A=0,o=0,b=0,tot=0;const sc=[];
+  for(let i=0;i<=10;i++)for(let j=0;j<=10;j++){
+    const p=ph[i]*pa[j];tot+=p;
+    if(i>j)H+=p;else if(i==j)D+=p;else A+=p;
+    if(i+j>2)o+=p;if(i>0&&j>0)b+=p;sc.push([i,j,p]);
+  }
+  sc.sort((x,y)=>y[2]-x[2]);
+  return {lh,la,pH:H/tot,pD:D/tot,pA:A/tot,o25:o/tot,btts:b/tot,top:sc.slice(0,3).map(x=>[x[0],x[1],x[2]/tot])};
+}
+const imp=o=>{const q=o.map(x=>1/x),s=q[0]+q[1]+q[2];return q.map(x=>x/s);};
+function backtest(ms,from,half,thr){
+  const cur=ms.filter(m=>m.d>=from&&m.hg!==null).sort((a,b)=>a.d-b.d);
+  const r={n:0,llM:0,brM:0,hitM:0,nk:0,llK:0,brK:0,hitK:0,bets:0,pl:0};
+  const br=(P,y)=>P.reduce((s,x,i)=>s+(x-(i==y?1:0))**2,0);
+  const am=P=>P.indexOf(Math.max(...P));
+  for(const m of cur){
+    const R=ratings(ms,m.d,half);if(!R)continue;
+    const p=predict(R,m.h,m.a),P=[p.pH,p.pD,p.pA],y=m.hg>m.ag?0:m.hg==m.ag?1:2;
+    r.n++;r.llM-=Math.log(Math.max(P[y],1e-9));r.brM+=br(P,y);if(am(P)==y)r.hitM++;
+    const oc=m.avgc||m.avg;
+    if(oc){const Q=imp(oc);r.nk++;r.llK-=Math.log(Q[y]);r.brK+=br(Q,y);if(am(Q)==y)r.hitK++;}
+    const ob=m.avg||m.avgc;
+    if(ob)for(let i=0;i<3;i++){if(P[i]*ob[i]-1>=thr){r.bets++;r.pl+=(i==y?ob[i]-1:-1);}}
+  }
+  return r;
+}
+//CORE_END
+
+/* ---------- UI ---------- */
+const LG={E0:'Anglia – Premier League',E1:'Anglia – Championship',E2:'Anglia – League One',E3:'Anglia – League Two',SC0:'Szkocja – Premiership',D1:'Niemcy – Bundesliga',D2:'Niemcy – 2. Bundesliga',I1:'Włochy – Serie A',I2:'Włochy – Serie B',SP1:'Hiszpania – La Liga',SP2:'Hiszpania – La Liga 2',F1:'Francja – Ligue 1',F2:'Francja – Ligue 2',N1:'Holandia – Eredivisie',B1:'Belgia – Pro League',P1:'Portugalia – Liga',T1:'Turcja – Süper Lig',G1:'Grecja – Super League'};
+const BASE='https://www.football-data.co.uk/';
+const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,proxyOnly:false,div:'E0'};
+let S=Object.assign({},DEF);
+try{Object.assign(S,JSON.parse(localStorage.getItem('typer')||'{}'));}catch(e){}
+const save=()=>{try{localStorage.setItem('typer',JSON.stringify(S));}catch(e){}};
+let tab='fx',sortBy='date',busy=false,msg='';
+const mem={txt:{},manual:null};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pc=x=>(x*100).toFixed(0)+'%';
+
+async function getText(url){
+  if(mem.txt[url])return mem.txt[url];
+  const tries=[];
+  if(!S.proxyOnly)tries.push(url);
+  if(S.proxy)tries.push(S.proxy+encodeURIComponent(url));
+  let err=new Error('brak źródła');
+  for(const u of tries){
+    try{const r=await fetch(u);if(r.ok){const t=await r.text();if(t.includes(',')&&t.length>100){mem.txt[url]=t;return t;}}err=new Error('HTTP '+r.status);}
+    catch(e){err=e;}
+  }
+  throw err;
+}
+const toMatches=t=>parseCSV(t).map(norm).filter(Boolean);
+
+async function loadLeague(div){
+  if(mem.manual){
+    const all=mem.manual.filter(m=>!m.div||m.div==div);
+    return {res:all.filter(m=>m.hg!==null),fx:all.filter(m=>m.hg===null)};
+  }
+  const [c,p,f]=await Promise.allSettled([
+    getText(`${BASE}mmz4281/${seasonCode(0)}/${div}.csv`),
+    getText(`${BASE}mmz4281/${seasonCode(-1)}/${div}.csv`),
+    getText(`${BASE}fixtures.csv`)]);
+  if(c.status!='fulfilled'&&p.status!='fulfilled')throw c.reason;
+  const res=[];
+  if(p.status=='fulfilled')res.push(...toMatches(p.value));
+  if(c.status=='fulfilled')res.push(...toMatches(c.value));
+  const fx=f.status=='fulfilled'?toMatches(f.value).filter(m=>m.div==div&&m.hg===null):[];
+  return {res:res.filter(m=>m.hg!==null),fx};
+}
+
+let D=null; // {div,res,fx,R}
+async function ensure(){
+  if(D&&D.div==S.div)return D;
+  const d=await loadLeague(S.div);
+  const R=ratings(d.res,new Date(Date.now()+864e5),S.half);
+  D={div:S.div,res:d.res,fx:d.fx.sort((a,b)=>a.d-b.d),R};
+  return D;
+}
+
+function rowsHtml(P,odds,Q){
+  const L=['1','X','2'];
+  return `<div class="cols"><span></span><span style="text-align:left"></span><span>Model</span><span>Rynek</span><span>Kurs</span><span>Edge</span></div>`+
+  L.map((l,i)=>{
+    const e=odds?P[i]*odds[i]-1:null,v=e!==null&&e*100>=S.thr;
+    return `<div class="row ${v?'val':''}"><b>${l}</b><div class="bar"><i style="width:${P[i]*100}%"></i>${Q?`<u style="left:${Q[i]*100}%"></u>`:''}</div><span>${pc(P[i])}</span><span class="m">${Q?pc(Q[i]):'–'}</span><span>${odds?odds[i].toFixed(2):'–'}</span><span class="e ${e!==null&&e<0?'neg':''}">${e!==null?(e>=0?'+':'')+(e*100).toFixed(0)+'%':''}</span></div>`;
+  }).join('');
+}
+const maxEdge=(p,o)=>o?Math.max(p.pH*o[0],p.pD*o[1],p.pA*o[2])-1:-9;
+
+function card(f,R){
+  const p=predict(R,f.h,f.a),P=[p.pH,p.pD,p.pA],Q=f.avg?imp(f.avg):null;
+  const dt=f.d.toLocaleString('pl-PL',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Warsaw'});
+  let ou='';
+  if(f.ov&&f.un){const eo=p.o25*f.ov-1,eu=(1-p.o25)*f.un-1;ou=` · O2.5 ${pc(p.o25)} (kurs ${f.ov.toFixed(2)}, ${eo>=0?'+':''}${(eo*100).toFixed(0)}%) · U2.5 ${pc(1-p.o25)} (${eu>=0?'+':''}${(eu*100).toFixed(0)}%)`;}
+  else ou=` · O2.5 ${pc(p.o25)}`;
+  return `<div class="card"><div class="hd"><span>${dt}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>
+  <div class="teams">${esc(f.h)} – ${esc(f.a)}</div>${rowsHtml(P,f.avg,Q)}
+  <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)}${ou}</div></div>`;
+}
+
+async function view(){
+  const v=$('v');
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t==tab));
+  if(tab=='st')return settings();
+  v.innerHTML='<p class="mut">Ładowanie danych…</p>';
+  let d;
+  try{d=await ensure();}
+  catch(e){v.innerHTML=`<p class="err">Nie udało się pobrać danych (${esc(e.message)}).</p><p class="mut">football-data.co.uk nie wysyła nagłówków CORS, więc przeglądarka potrzebuje proxy (Cloudflare Worker) albo wgraj pliki CSV ręcznie w Ustawieniach.</p>`;return;}
+  if(!d.R){v.innerHTML='<p class="err">Za mało rozegranych meczów, żeby zbudować model.</p>';return;}
+  if(tab=='fx')fixtures(d);else if(tab=='cu')custom(d);else if(tab=='bt')bt(d);
+}
+
+function fixtures(d){
+  let fx=d.fx.slice();
+  if(sortBy=='val')fx.sort((a,b)=>maxEdge(predict(d.R,b.h,b.a),b.avg)-maxEdge(predict(d.R,a.h,a.a),a.avg));
+  const nVal=fx.filter(f=>maxEdge(predict(d.R,f.h,f.a),f.avg)*100>=S.thr).length;
+  $('v').innerHTML=`<div class="chips"><button data-s="date" class="${sortBy=='date'?'on':''}">Wg daty</button><button data-s="val" class="${sortBy=='val'?'on':''}">Wg value</button></div>
+  <p class="mut" style="margin:0 0 10px">${fx.length} nadchodzących meczów · ${nVal} z edge ≥ ${S.thr}% · model z ${d.res.length} meczów</p>`+
+  (fx.length?fx.map(f=>card(f,d.R)).join(''):'<p class="mut">Brak nadchodzących meczów w fixtures.csv dla tej ligi (przerwa reprezentacyjna / koniec sezonu). Użyj zakładki „Własny mecz”.</p>')+
+  '<div class="foot">Model statystyczny – nie gwarancja wyniku. Graj odpowiedzialnie.</div>';
+  document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{sortBy=b.dataset.s;fixtures(d);});
+}
+
+function custom(d){
+  const teams=Object.keys(d.R.T).sort();
+  const opt=s=>teams.map(t=>`<option ${t==s?'selected':''}>${esc(t)}</option>`).join('');
+  $('v').innerHTML=`<div class="card"><div class="g2"><div><label>Gospodarz</label><select id="ch">${opt(teams[0])}</select></div><div><label>Gość</label><select id="ca">${opt(teams[1])}</select></div></div>
+  <label>Twoje kursy (opcjonalnie): 1 / X / 2</label><div class="g3"><input id="o1" inputmode="decimal" placeholder="1"><input id="o2" inputmode="decimal" placeholder="X"><input id="o3" inputmode="decimal" placeholder="2"></div></div><div id="co"></div>`;
+  const go=()=>{
+    const h=$('ch').value,a=$('ca').value;
+    if(h==a){$('co').innerHTML='<p class="mut">Wybierz dwie różne drużyny.</p>';return;}
+    const p=predict(d.R,h,a),o=[1,2,3].map(i=>num($('o'+i).value.replace(',','.')));
+    const odds=o.every(x=>x&&x>1)?o:null;
+    $('co').innerHTML=`<div class="card"><div class="hd"><span>Teren: ${esc(h)}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>${rowsHtml([p.pH,p.pD,p.pA],odds,odds?imp(odds):null)}
+    <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)} · Over 2.5 ${pc(p.o25)} · Under 2.5 ${pc(1-p.o25)}</div></div>`;
+  };
+  ['ch','ca','o1','o2','o3'].forEach(id=>$(id).oninput=go);go();
+}
+
+function bt(d){
+  const sc=new Date(Date.UTC(new Date().getMonth()>=6?new Date().getFullYear():new Date().getFullYear()-1,6,1));
+  let r=backtest(d.res,sc,S.half,S.thr/100),lbl='bieżący sezon';
+  if(r.n<20){r=backtest(d.res,new Date(sc.getTime()-365*864e5),S.half,S.thr/100);lbl='poprzedni sezon (bieżący ma za mało meczów)';}
+  if(!r.n){$('v').innerHTML='<p class="mut">Za mało danych do backtestu.</p>';return;}
+  const f=(x,n)=>x.toFixed(n),roi=r.bets?r.pl/r.bets*100:0;
+  $('v').innerHTML=`<div class="card"><div class="teams">Backtest walk-forward – ${lbl}</div>
+  <p class="mut" style="margin-top:0">Każdy mecz przewidziany wyłącznie na podstawie meczów rozegranych przed nim. Benchmark: kursy zamknięcia rynku (po usunięciu marży).</p>
+  <table><tr><th></th><th>Model</th><th>Rynek</th></tr>
+  <tr><td>Mecze</td><td>${r.n}</td><td>${r.nk}</td></tr>
+  <tr><td>Log loss ↓</td><td>${f(r.llM/r.n,3)}</td><td>${r.nk?f(r.llK/r.nk,3):'–'}</td></tr>
+  <tr><td>Brier ↓</td><td>${f(r.brM/r.n,3)}</td><td>${r.nk?f(r.brK/r.nk,3):'–'}</td></tr>
+  <tr><td>Trafność typu</td><td>${pc(r.hitM/r.n)}</td><td>${r.nk?pc(r.hitK/r.nk):'–'}</td></tr></table></div>
+  <div class="card"><div class="teams">Symulacja value (edge ≥ ${S.thr}%, stawka 1)</div>
+  <table><tr><td>Zakładów</td><td>${r.bets}</td></tr><tr><td>Bilans</td><td>${r.pl>=0?'+':''}${f(r.pl,1)}</td></tr><tr><td>ROI</td><td>${r.bets?(roi>=0?'+':'')+f(roi,1)+'%':'–'}</td></tr></table>
+  <div class="sub">Mała próba = duży szum. Jeśli log loss modelu jest wyraźnie gorszy od rynku, „value” to zwykle błędy modelu, nie okazje.</div></div>`;
+}
+
+function settings(){
+  $('v').innerHTML=`<div class="card"><label>Proxy CORS (prefiks, URL doklejany na końcu)</label><input id="sp" value="${esc(S.proxy)}" placeholder="https://twoj-worker.workers.dev/?url=">
+  <label><input type="checkbox" id="spo" ${S.proxyOnly?'checked':''} style="width:auto"> Zawsze używaj proxy (pomiń próbę bezpośrednią)</label>
+  <div class="g2"><div><label>Okres połowicznego zaniku wagi (dni)</label><input id="sh" type="number" value="${S.half}"></div><div><label>Próg value (edge, %)</label><input id="st" type="number" step="0.5" value="${S.thr}"></div></div>
+  <p><button class="p" id="ss">Zapisz</button> <span id="sm" class="mut"></span></p></div>
+  <div class="card"><div class="teams">Wgraj CSV ręcznie</div><p class="mut" style="margin-top:0">Gdy proxy nie działa: pobierz pliki z football-data.co.uk (sezon + fixtures.csv) i wskaż je tutaj. Mecze z wynikiem trafiają do modelu, bez wyniku – do listy nadchodzących.</p>
+  <input type="file" id="sf" accept=".csv" multiple><p class="mut" id="sfm"></p>${mem.manual?'<button id="sx">Wróć do pobierania z sieci</button>':''}</div>`;
+  $('ss').onclick=()=>{S.proxy=$('sp').value.trim();S.proxyOnly=$('spo').checked;S.half=Math.max(30,+$('sh').value||180);S.thr=+$('st').value||5;save();D=null;$('sm').textContent='Zapisano';};
+  $('sf').onchange=async e=>{
+    let all=[];for(const f of e.target.files)all.push(...toMatches(await f.text()));
+    mem.manual=all;D=null;$('sfm').textContent=`Wczytano ${all.length} wierszy.`;
+  };
+  if($('sx'))$('sx').onclick=()=>{mem.manual=null;D=null;settings();};
+}
+
+$('lg').innerHTML=Object.entries(LG).map(([k,v])=>`<option value="${k}" ${k==S.div?'selected':''}>${v}</option>`).join('');
+$('lg').onchange=()=>{S.div=$('lg').value;save();view();};
+$('rf').onclick=()=>{mem.txt={};D=null;view();};
+$('nav').onclick=e=>{const b=e.target.closest('button');if(b){tab=b.dataset.t;view();}};
+view();
+</script>
+</body>
+</html>
