@@ -89,18 +89,18 @@ function norm(r){
     ov:num(r['Avg>2.5'])||num(r['B365>2.5']),un:num(r['Avg<2.5'])||num(r['B365<2.5'])};
 }
 function ratings(ms,asOf,half){
-  let sw=0,sh=0,sa=0;const T={};
+  let sw=0,sh=0,sa=0,nm=0;const T={};
   for(const m of ms){
     if(m.hg===null||m.d>=asOf)continue;
     const w=Math.pow(0.5,((asOf-m.d)/864e5)/half);
-    sw+=w;sh+=w*m.hg;sa+=w*m.ag;
+    sw+=w;nm++;sh+=w*m.hg;sa+=w*m.ag;
     const H=T[m.h]||(T[m.h]={gf:0,ga:0,w:0}),A=T[m.a]||(T[m.a]={gf:0,ga:0,w:0});
     H.gf+=w*m.hg;H.ga+=w*m.ag;H.w+=w;A.gf+=w*m.ag;A.ga+=w*m.hg;A.w+=w;
   }
   if(sw<5)return null;
   const hAvg=sh/sw,aAvg=sa/sw,mu=(hAvg+aAvg)/2,h=Math.sqrt(hAvg/aAvg),K=6;
   for(const t in T){T[t].att=((T[t].gf+K*mu)/(T[t].w+K))/mu;T[t].def=((T[t].ga+K*mu)/(T[t].w+K))/mu;}
-  return {T,mu,h,hAvg,aAvg};
+  return {T,mu,h,hAvg,aAvg,nm};
 }
 function pmf(l,n=10){const p=[Math.exp(-l)];for(let k=1;k<=n;k++)p.push(p[k-1]*l/k);return p;}
 function predict(R,h,a){
@@ -116,19 +116,24 @@ function predict(R,h,a){
   return {lh,la,pH:H/tot,pD:D/tot,pA:A/tot,o25:o/tot,btts:b/tot,top:sc.slice(0,3).map(x=>[x[0],x[1],x[2]/tot])};
 }
 const imp=o=>{const q=o.map(x=>1/x),s=q[0]+q[1]+q[2];return q.map(x=>x/s);};
-function backtest(ms,from,half,thr){
+const mse=a=>{const n=a.length;if(n<2)return{m:0,se:0,n};const m=a.reduce((x,y)=>x+y,0)/n;const v=a.reduce((x,y)=>x+(y-m)*(y-m),0)/(n-1);return{m,se:Math.sqrt(v/n),n};};
+function backtest(ms,from,half,thr,minPrior=100){
   const cur=ms.filter(m=>m.d>=from&&m.hg!==null).sort((a,b)=>a.d-b.d);
-  const r={n:0,llM:0,brM:0,hitM:0,nk:0,llK:0,brK:0,hitK:0,bets:0,pl:0};
+  const r={n:0,llM:0,llMk:0,brM:0,hitM:0,nk:0,llK:0,brK:0,hitK:0,bets:0,pl:0,dll:[],ret:[],by:{},
+    bk:[{l:'kurs < 2,0',hi:2,n:0,pl:0},{l:'kurs 2,0–3,5',hi:3.5,n:0,pl:0},{l:'kurs > 3,5',hi:1e9,n:0,pl:0}]};
+  const sl=m=>{const y=m.d.getUTCFullYear(),s=m.d.getUTCMonth()>=6?y:y-1;return s+'/'+pad((s+1)%100);};
   const br=(P,y)=>P.reduce((s,x,i)=>s+(x-(i==y?1:0))**2,0);
   const am=P=>P.indexOf(Math.max(...P));
   for(const m of cur){
-    const R=ratings(ms,m.d,half);if(!R)continue;
+    const R=ratings(ms,m.d,half);if(!R||R.nm<minPrior)continue;
     const p=predict(R,m.h,m.a),P=[p.pH,p.pD,p.pA],y=m.hg>m.ag?0:m.hg==m.ag?1:2;
-    r.n++;r.llM-=Math.log(Math.max(P[y],1e-9));r.brM+=br(P,y);if(am(P)==y)r.hitM++;
+    const k=sl(m),B=r.by[k]||(r.by[k]={n:0,nk:0,llMk:0,llK:0,bets:0,pl:0});
+    const lm=-Math.log(Math.max(P[y],1e-9));
+    r.n++;B.n++;r.llM+=lm;r.brM+=br(P,y);if(am(P)==y)r.hitM++;
     const oc=m.avgc||m.avg;
-    if(oc){const Q=imp(oc);r.nk++;r.llK-=Math.log(Q[y]);r.brK+=br(Q,y);if(am(Q)==y)r.hitK++;}
+    if(oc){const Q=imp(oc),lk=-Math.log(Q[y]);r.nk++;B.nk++;r.llMk+=lm;B.llMk+=lm;r.llK+=lk;B.llK+=lk;r.brK+=br(Q,y);if(am(Q)==y)r.hitK++;r.dll.push(lm-lk);}
     const ob=m.avg||m.avgc;
-    if(ob)for(let i=0;i<3;i++){if(P[i]*ob[i]-1>=thr){r.bets++;r.pl+=(i==y?ob[i]-1:-1);}}
+    if(ob)for(let i=0;i<3;i++){if(P[i]*ob[i]-1>=thr){const g=i==y?ob[i]-1:-1;r.bets++;r.pl+=g;B.bets++;B.pl+=g;r.ret.push(g);const b=r.bk.find(x=>ob[i]<x.hi);b.n++;b.pl+=g;}}
   }
   return r;
 }
@@ -176,6 +181,16 @@ async function loadLeague(div){
   if(c.status=='fulfilled')res.push(...toMatches(c.value));
   const fx=f.status=='fulfilled'?toMatches(f.value).filter(m=>m.div==div&&m.hg===null):[];
   return {res:res.filter(m=>m.hg!==null),fx};
+}
+
+async function loadHist(d){
+  if(d.hist)return d.hist;
+  if(mem.manual){d.hist=d.res;return d.hist;}
+  const rs=await Promise.allSettled([-2,-3,-4,-5,-6].map(k=>getText(`${BASE}mmz4281/${seasonCode(k)}/${d.div}.csv`)));
+  const old=[];
+  rs.forEach(r=>{if(r.status=='fulfilled')old.push(...toMatches(r.value).filter(m=>m.hg!==null));});
+  d.hist=old.concat(d.res);
+  return d.hist;
 }
 
 let D=null; // {div,res,fx,R}
@@ -247,22 +262,37 @@ function custom(d){
   ['ch','ca','o1','o2','o3'].forEach(id=>$(id).oninput=go);go();
 }
 
-function bt(d){
-  const sc=new Date(Date.UTC(new Date().getMonth()>=6?new Date().getFullYear():new Date().getFullYear()-1,6,1));
-  let r=backtest(d.res,sc,S.half,S.thr/100),lbl='bieżący sezon';
-  if(r.n<20){r=backtest(d.res,new Date(sc.getTime()-365*864e5),S.half,S.thr/100);lbl='poprzedni sezon (bieżący ma za mało meczów)';}
+async function bt(d){
+  $('v').innerHTML='<p class="mut">Ładowanie historii sezonów…</p>';
+  const ms=await loadHist(d);
+  if(tab!='bt')return;
+  const now=new Date(),yr=now.getUTCMonth()>=6?now.getUTCFullYear():now.getUTCFullYear()-1;
+  const r=backtest(ms,new Date(Date.UTC(yr-5,6,1)),S.half,S.thr/100);
   if(!r.n){$('v').innerHTML='<p class="mut">Za mało danych do backtestu.</p>';return;}
-  const f=(x,n)=>x.toFixed(n),roi=r.bets?r.pl/r.bets*100:0;
-  $('v').innerHTML=`<div class="card"><div class="teams">Backtest walk-forward – ${lbl}</div>
-  <p class="mut" style="margin-top:0">Każdy mecz przewidziany wyłącznie na podstawie meczów rozegranych przed nim. Benchmark: kursy zamknięcia rynku (po usunięciu marży).</p>
+  const f=(x,n)=>x.toFixed(n),sg=x=>(x>=0?'+':'')+x.toFixed(1);
+  const seasons=Object.keys(r.by).sort();
+  const dm=mse(r.dll),dci=2*dm.se,rm=mse(r.ret),roi=rm.m*100,rci=2*rm.se*100;
+  const vLL=Math.abs(dm.m)<=dci?'różnica w granicach szumu – brak dowodu, że model bije rynek':(dm.m<0?'model lepszy od rynku poza szumem – sprawdź, czy to się powtarza w każdym sezonie':'model gorszy od rynku poza szumem – „value” to głównie błędy modelu');
+  const vROI=r.bets<2?'':(Math.abs(roi)<=rci?'wynik w granicach szumu':(roi>0?'dodatni poza szumem – zweryfikuj na kolejnych sezonach':'ujemny poza szumem'));
+  $('v').innerHTML=`<div class="card"><div class="teams">Backtest walk-forward – ${seasons.length} sezon(y), ${r.n} meczów</div>
+  <p class="mut" style="margin-top:0">Każdy mecz przewidziany wyłącznie na podstawie meczów rozegranych przed nim (min. 100 wcześniejszych). Benchmark: kursy zamknięcia rynku bez marży.</p>
   <table><tr><th></th><th>Model</th><th>Rynek</th></tr>
-  <tr><td>Mecze</td><td>${r.n}</td><td>${r.nk}</td></tr>
-  <tr><td>Log loss ↓</td><td>${f(r.llM/r.n,3)}</td><td>${r.nk?f(r.llK/r.nk,3):'–'}</td></tr>
+  <tr><td>Mecze z kursami</td><td>${r.nk}</td><td>${r.nk}</td></tr>
+  <tr><td>Log loss ↓</td><td>${r.nk?f(r.llMk/r.nk,3):'–'}</td><td>${r.nk?f(r.llK/r.nk,3):'–'}</td></tr>
   <tr><td>Brier ↓</td><td>${f(r.brM/r.n,3)}</td><td>${r.nk?f(r.brK/r.nk,3):'–'}</td></tr>
-  <tr><td>Trafność typu</td><td>${pc(r.hitM/r.n)}</td><td>${r.nk?pc(r.hitK/r.nk):'–'}</td></tr></table></div>
+  <tr><td>Trafność typu</td><td>${pc(r.hitM/r.n)}</td><td>${r.nk?pc(r.hitK/r.nk):'–'}</td></tr></table>
+  <div class="sub"><b>Różnica log loss (model − rynek): ${dm.m>=0?'+':''}${f(dm.m,3)} ± ${f(dci,3)}</b> (±2 błędy std.)<br>${vLL}.</div></div>
+  <div class="card"><div class="teams">Wg sezonów</div>
+  <table><tr><th>Sezon</th><th>Mecze</th><th>LL model</th><th>LL rynek</th><th>ROI</th></tr>
+  ${seasons.map(k=>{const B=r.by[k];return `<tr><td>${k}</td><td>${B.n}</td><td>${B.nk?f(B.llMk/B.nk,3):'–'}</td><td>${B.nk?f(B.llK/B.nk,3):'–'}</td><td>${B.bets?sg(B.pl/B.bets*100)+'%':'–'}</td></tr>`;}).join('')}</table></div>
   <div class="card"><div class="teams">Symulacja value (edge ≥ ${S.thr}%, stawka 1)</div>
-  <table><tr><td>Zakładów</td><td>${r.bets}</td></tr><tr><td>Bilans</td><td>${r.pl>=0?'+':''}${f(r.pl,1)}</td></tr><tr><td>ROI</td><td>${r.bets?(roi>=0?'+':'')+f(roi,1)+'%':'–'}</td></tr></table>
-  <div class="sub">Mała próba = duży szum. Jeśli log loss modelu jest wyraźnie gorszy od rynku, „value” to zwykle błędy modelu, nie okazje.</div></div>`;
+  <table><tr><td>Zakładów</td><td>${r.bets}</td></tr><tr><td>Bilans</td><td>${r.pl>=0?'+':''}${f(r.pl,1)}</td></tr>
+  <tr><td>ROI</td><td>${r.bets?sg(roi)+'% ± '+f(rci,1)+' p.p.':'–'}</td></tr></table>
+  <div class="sub">${vROI?vROI+'.':''}</div>
+  <div class="teams" style="margin-top:12px">ROI wg kursu typu</div>
+  <table><tr><th>Przedział</th><th>Zakładów</th><th>ROI</th></tr>
+  ${r.bk.map(b=>`<tr><td>${b.l}</td><td>${b.n}</td><td>${b.n?sg(b.pl/b.n*100)+'%':'–'}</td></tr>`).join('')}</table>
+  <div class="sub">Jeśli cały zysk siedzi w kursach &gt; 3,5, to zwykle kilka trafionych outsiderów, a nie przewaga modelu. Kursy z pliku to średnia rynku sprzed zamknięcia, bez uwzględnienia limitów stawek i ruchu kursu.</div></div>`;
 }
 
 function settings(){
