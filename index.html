@@ -25,9 +25,9 @@ nav button.on{color:var(--acc);font-weight:600}
 .cols{color:var(--mut);font-size:11px;margin-bottom:2px}
 .cols span,.row span{text-align:right}
 .row{margin:3px 0;padding:2px 0}
-.row.val{background:rgba(74,222,128,.12);border-radius:6px}
-.row.val .e{color:var(--ok);font-weight:700}
-.row .e.neg{color:var(--bad)}
+.row.hi{background:rgba(251,191,36,.12);border-radius:6px}
+.row.hi .e{color:var(--warn);font-weight:700}
+.sub.warn{color:var(--warn)}
 .bar{position:relative;height:8px;background:#0f172a;border-radius:4px}
 .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--acc);border-radius:4px}
 .bar u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--warn)}
@@ -117,32 +117,41 @@ function predict(R,h,a){
 }
 const imp=o=>{const q=o.map(x=>1/x),s=q[0]+q[1]+q[2];return q.map(x=>x/s);};
 const mse=a=>{const n=a.length;if(n<2)return{m:0,se:0,n};const m=a.reduce((x,y)=>x+y,0)/n;const v=a.reduce((x,y)=>x+(y-m)*(y-m),0)/(n-1);return{m,se:Math.sqrt(v/n),n};};
-function backtest(ms,from,half,thr,minPrior=100){
+function btRecords(ms,from,half,minPrior=100){
   const cur=ms.filter(m=>m.d>=from&&m.hg!==null).sort((a,b)=>a.d-b.d);
-  const r={n:0,llM:0,llMk:0,brM:0,hitM:0,nk:0,llK:0,brK:0,hitK:0,bets:0,pl:0,dll:[],ret:[],by:{},
-    bk:[{l:'kurs < 2,0',hi:2,n:0,pl:0},{l:'kurs 2,0–3,5',hi:3.5,n:0,pl:0},{l:'kurs > 3,5',hi:1e9,n:0,pl:0}]};
+  const out=[];
   const sl=m=>{const y=m.d.getUTCFullYear(),s=m.d.getUTCMonth()>=6?y:y-1;return s+'/'+pad((s+1)%100);};
-  const br=(P,y)=>P.reduce((s,x,i)=>s+(x-(i==y?1:0))**2,0);
-  const am=P=>P.indexOf(Math.max(...P));
   for(const m of cur){
     const R=ratings(ms,m.d,half);if(!R||R.nm<minPrior)continue;
-    const p=predict(R,m.h,m.a),P=[p.pH,p.pD,p.pA],y=m.hg>m.ag?0:m.hg==m.ag?1:2;
-    const k=sl(m),B=r.by[k]||(r.by[k]={n:0,nk:0,llMk:0,llK:0,bets:0,pl:0});
+    const p=predict(R,m.h,m.a),y=m.hg>m.ag?0:m.hg==m.ag?1:2;
+    const ob=m.avg||m.avgc,oc=m.avgc||m.avg;
+    out.push({k:sl(m),P:[p.pH,p.pD,p.pA],y,ob:ob||null,Qb:ob?imp(ob):null,Qc:oc?imp(oc):null});
+  }
+  return out;
+}
+const blend=(P,Q,w)=>Q?P.map((x,i)=>(1-w)*x+w*Q[i]):P;
+function btEval(recs,w,thr){
+  const r={n:0,llM:0,llMk:0,brM:0,hitM:0,nk:0,llK:0,brK:0,hitK:0,bets:0,pl:0,dll:[],ret:[],by:{},
+    bk:[{l:'kurs < 2,0',hi:2,n:0,pl:0},{l:'kurs 2,0–3,5',hi:3.5,n:0,pl:0},{l:'kurs > 3,5',hi:1e9,n:0,pl:0}]};
+  const br=(P,y)=>P.reduce((s,x,i)=>s+(x-(i==y?1:0))**2,0);
+  const am=P=>P.indexOf(Math.max(...P));
+  for(const c of recs){
+    const P=blend(c.P,c.Qb,w),y=c.y;
+    const B=r.by[c.k]||(r.by[c.k]={n:0,nk:0,llMk:0,llK:0,bets:0,pl:0});
     const lm=-Math.log(Math.max(P[y],1e-9));
     r.n++;B.n++;r.llM+=lm;r.brM+=br(P,y);if(am(P)==y)r.hitM++;
-    const oc=m.avgc||m.avg;
-    if(oc){const Q=imp(oc),lk=-Math.log(Q[y]);r.nk++;B.nk++;r.llMk+=lm;B.llMk+=lm;r.llK+=lk;B.llK+=lk;r.brK+=br(Q,y);if(am(Q)==y)r.hitK++;r.dll.push(lm-lk);}
-    const ob=m.avg||m.avgc;
-    if(ob)for(let i=0;i<3;i++){if(P[i]*ob[i]-1>=thr){const g=i==y?ob[i]-1:-1;r.bets++;r.pl+=g;B.bets++;B.pl+=g;r.ret.push(g);const b=r.bk.find(x=>ob[i]<x.hi);b.n++;b.pl+=g;}}
+    if(c.Qc){const Q=c.Qc,lk=-Math.log(Q[y]);r.nk++;B.nk++;r.llMk+=lm;B.llMk+=lm;r.llK+=lk;B.llK+=lk;r.brK+=br(Q,y);if(am(Q)==y)r.hitK++;r.dll.push(lm-lk);}
+    if(c.ob)for(let i=0;i<3;i++){if(P[i]*c.ob[i]-1>=thr){const g=i==y?c.ob[i]-1:-1;r.bets++;r.pl+=g;B.bets++;B.pl+=g;r.ret.push(g);const b=r.bk.find(x=>c.ob[i]<x.hi);b.n++;b.pl+=g;}}
   }
   return r;
 }
+function backtest(ms,from,half,thr,minPrior=100,w=0){return btEval(btRecords(ms,from,half,minPrior),w,thr);}
 //CORE_END
 
 /* ---------- UI ---------- */
 const LG={E0:'Anglia – Premier League',E1:'Anglia – Championship',E2:'Anglia – League One',E3:'Anglia – League Two',SC0:'Szkocja – Premiership',D1:'Niemcy – Bundesliga',D2:'Niemcy – 2. Bundesliga',I1:'Włochy – Serie A',I2:'Włochy – Serie B',SP1:'Hiszpania – La Liga',SP2:'Hiszpania – La Liga 2',F1:'Francja – Ligue 1',F2:'Francja – Ligue 2',N1:'Holandia – Eredivisie',B1:'Belgia – Pro League',P1:'Portugalia – Liga',T1:'Turcja – Süper Lig',G1:'Grecja – Super League'};
 const BASE='https://www.football-data.co.uk/';
-const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,proxyOnly:false,div:'E0'};
+const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,proxyOnly:false,div:'E0'};
 let S=Object.assign({},DEF);
 try{Object.assign(S,JSON.parse(localStorage.getItem('typer')||'{}'));}catch(e){}
 const save=()=>{try{localStorage.setItem('typer',JSON.stringify(S));}catch(e){}};
@@ -204,23 +213,29 @@ async function ensure(){
 
 function rowsHtml(P,odds,Q){
   const L=['1','X','2'];
-  return `<div class="cols"><span></span><span style="text-align:left"></span><span>Model</span><span>Rynek</span><span>Kurs</span><span>Edge</span></div>`+
+  return `<div class="cols"><span></span><span></span><span>Model</span><span>Rynek</span><span>Kurs</span><span>Różn.</span></div>`+
   L.map((l,i)=>{
-    const e=odds?P[i]*odds[i]-1:null,v=e!==null&&e*100>=S.thr;
-    return `<div class="row ${v?'val':''}"><b>${l}</b><div class="bar"><i style="width:${P[i]*100}%"></i>${Q?`<u style="left:${Q[i]*100}%"></u>`:''}</div><span>${pc(P[i])}</span><span class="m">${Q?pc(Q[i]):'–'}</span><span>${odds?odds[i].toFixed(2):'–'}</span><span class="e ${e!==null&&e<0?'neg':''}">${e!==null?(e>=0?'+':'')+(e*100).toFixed(0)+'%':''}</span></div>`;
+    const d=Q?(P[i]-Q[i])*100:null,hi=d!==null&&Math.abs(d)>=S.thrPP;
+    return `<div class="row ${hi?'hi':''}"><b>${l}</b><div class="bar"><i style="width:${P[i]*100}%"></i>${Q?`<u style="left:${Q[i]*100}%"></u>`:''}</div><span>${pc(P[i])}</span><span class="m">${Q?pc(Q[i]):'–'}</span><span>${odds?odds[i].toFixed(2):'–'}</span><span class="e">${d!==null?(d>=0?'+':'')+d.toFixed(0):''}</span></div>`;
   }).join('');
 }
-const maxEdge=(p,o)=>o?Math.max(p.pH*o[0],p.pD*o[1],p.pA*o[2])-1:-9;
+const maxDiff=(p,Q)=>Q?Math.max(Math.abs(p.pH-Q[0]),Math.abs(p.pD-Q[1]),Math.abs(p.pA-Q[2]))*100:-1;
+function mixLine(P,Q,odds){
+  if(!Q||!odds)return '';
+  const B=blend(P,Q,S.w);
+  return `<br>Miks z rynkiem (waga ${Math.round(S.w*100)}%): `+['1','X','2'].map((l,i)=>{const e=(B[i]*odds[i]-1)*100;return `${l} ${pc(B[i])} (edge ${e>=0?'+':''}${e.toFixed(0)}%)`;}).join(' · ');
+}
 
 function card(f,R){
   const p=predict(R,f.h,f.a),P=[p.pH,p.pD,p.pA],Q=f.avg?imp(f.avg):null;
   const dt=f.d.toLocaleString('pl-PL',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Warsaw'});
-  let ou='';
-  if(f.ov&&f.un){const eo=p.o25*f.ov-1,eu=(1-p.o25)*f.un-1;ou=` · O2.5 ${pc(p.o25)} (kurs ${f.ov.toFixed(2)}, ${eo>=0?'+':''}${(eo*100).toFixed(0)}%) · U2.5 ${pc(1-p.o25)} (${eu>=0?'+':''}${(eu*100).toFixed(0)}%)`;}
-  else ou=` · O2.5 ${pc(p.o25)}`;
+  let ou;
+  if(f.ov&&f.un){const qo=(1/f.ov)/(1/f.ov+1/f.un);ou=` · Over 2.5: model ${pc(p.o25)}, rynek ${pc(qo)} (kurs ${f.ov.toFixed(2)})`;}
+  else ou=` · Over 2.5: model ${pc(p.o25)}`;
+  const warn=maxDiff(p,Q)>=S.thrPP?`<div class="sub warn">⚠ Duża różnica z rynkiem (≥ ${S.thrPP} p.p.) – sprawdź skład, kontuzje i rotację przed decyzją.</div>`:'';
   return `<div class="card"><div class="hd"><span>${dt}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>
   <div class="teams">${esc(f.h)} – ${esc(f.a)}</div>${rowsHtml(P,f.avg,Q)}
-  <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)}${ou}</div></div>`;
+  <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)}${ou}${mixLine(P,Q,f.avg)}</div>${warn}</div>`;
 }
 
 async function view(){
@@ -237,10 +252,12 @@ async function view(){
 
 function fixtures(d){
   let fx=d.fx.slice();
-  if(sortBy=='val')fx.sort((a,b)=>maxEdge(predict(d.R,b.h,b.a),b.avg)-maxEdge(predict(d.R,a.h,a.a),a.avg));
-  const nVal=fx.filter(f=>maxEdge(predict(d.R,f.h,f.a),f.avg)*100>=S.thr).length;
-  $('v').innerHTML=`<div class="chips"><button data-s="date" class="${sortBy=='date'?'on':''}">Wg daty</button><button data-s="val" class="${sortBy=='val'?'on':''}">Wg value</button></div>
-  <p class="mut" style="margin:0 0 10px">${fx.length} nadchodzących meczów · ${nVal} z edge ≥ ${S.thr}% · model z ${d.res.length} meczów</p>`+
+  const dif=f=>maxDiff(predict(d.R,f.h,f.a),f.avg?imp(f.avg):null);
+  if(sortBy=='diff')fx.sort((a,b)=>dif(b)-dif(a));
+  const nHi=fx.filter(f=>dif(f)>=S.thrPP).length;
+  $('v').innerHTML=`<div class="chips"><button data-s="date" class="${sortBy=='date'?'on':''}">Wg daty</button><button data-s="diff" class="${sortBy=='diff'?'on':''}">Wg różnicy z rynkiem</button></div>
+  <p class="mut" style="margin:0 0 6px">${fx.length} nadchodzących meczów · ${nHi} z różnicą ≥ ${S.thrPP} p.p. · model z ${d.res.length} meczów</p>
+  <p class="sub" style="margin:0 0 10px">Podświetlenie oznacza, że model różni się od rynku. W backteście rynek był trafniejszy od samego modelu, więc traktuj to jako powód do sprawdzenia składów i kontuzji, a nie sygnał do obstawiania.</p>`+
   (fx.length?fx.map(f=>card(f,d.R)).join(''):'<p class="mut">Brak nadchodzących meczów w fixtures.csv dla tej ligi (przerwa reprezentacyjna / koniec sezonu). Użyj zakładki „Własny mecz”.</p>')+
   '<div class="foot">Model statystyczny – nie gwarancja wyniku. Graj odpowiedzialnie.</div>';
   document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{sortBy=b.dataset.s;fixtures(d);});
@@ -254,10 +271,11 @@ function custom(d){
   const go=()=>{
     const h=$('ch').value,a=$('ca').value;
     if(h==a){$('co').innerHTML='<p class="mut">Wybierz dwie różne drużyny.</p>';return;}
-    const p=predict(d.R,h,a),o=[1,2,3].map(i=>num($('o'+i).value.replace(',','.')));
-    const odds=o.every(x=>x&&x>1)?o:null;
-    $('co').innerHTML=`<div class="card"><div class="hd"><span>Teren: ${esc(h)}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>${rowsHtml([p.pH,p.pD,p.pA],odds,odds?imp(odds):null)}
-    <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)} · Over 2.5 ${pc(p.o25)} · Under 2.5 ${pc(1-p.o25)}</div></div>`;
+    const p=predict(d.R,h,a),P=[p.pH,p.pD,p.pA],o=[1,2,3].map(i=>num($('o'+i).value.replace(',','.')));
+    const odds=o.every(x=>x&&x>1)?o:null,Q=odds?imp(odds):null;
+    const warn=maxDiff(p,Q)>=S.thrPP?`<div class="sub warn">⚠ Duża różnica z rynkiem (≥ ${S.thrPP} p.p.) – sprawdź skład, kontuzje i rotację przed decyzją.</div>`:'';
+    $('co').innerHTML=`<div class="card"><div class="hd"><span>Teren: ${esc(h)}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>${rowsHtml(P,odds,Q)}
+    <div class="sub">Wyniki: ${p.top.map(t=>`${t[0]}:${t[1]} (${pc(t[2])})`).join(', ')}<br>BTTS ${pc(p.btts)} · Over 2.5 ${pc(p.o25)} · Under 2.5 ${pc(1-p.o25)}${mixLine(P,Q,odds)}</div>${warn}</div>`;
   };
   ['ch','ca','o1','o2','o3'].forEach(id=>$(id).oninput=go);go();
 }
@@ -267,42 +285,63 @@ async function bt(d){
   const ms=await loadHist(d);
   if(tab!='bt')return;
   const now=new Date(),yr=now.getUTCMonth()>=6?now.getUTCFullYear():now.getUTCFullYear()-1;
-  const r=backtest(ms,new Date(Date.UTC(yr-5,6,1)),S.half,S.thr/100);
-  if(!r.n){$('v').innerHTML='<p class="mut">Za mało danych do backtestu.</p>';return;}
-  const f=(x,n)=>x.toFixed(n),sg=x=>(x>=0?'+':'')+x.toFixed(1);
-  const seasons=Object.keys(r.by).sort();
-  const dm=mse(r.dll),dci=2*dm.se,rm=mse(r.ret),roi=rm.m*100,rci=2*rm.se*100;
-  const vLL=Math.abs(dm.m)<=dci?'różnica w granicach szumu – brak dowodu, że model bije rynek':(dm.m<0?'model lepszy od rynku poza szumem – sprawdź, czy to się powtarza w każdym sezonie':'model gorszy od rynku poza szumem – „value” to głównie błędy modelu');
-  const vROI=r.bets<2?'':(Math.abs(roi)<=rci?'wynik w granicach szumu':(roi>0?'dodatni poza szumem – zweryfikuj na kolejnych sezonach':'ujemny poza szumem'));
-  $('v').innerHTML=`<div class="card"><div class="teams">Backtest walk-forward – ${seasons.length} sezon(y), ${r.n} meczów</div>
+  const recs=btRecords(ms,new Date(Date.UTC(yr-5,6,1)),S.half,100);
+  if(!recs.length){$('v').innerHTML='<p class="mut">Za mało danych do backtestu.</p>';return;}
+  const f=(x,n)=>x.toFixed(n),sg=x=>(x>=0?'+':'')+x.toFixed(1),thr=S.thr/100;
+  const ev=w=>btEval(recs,w,thr);
+  const r0=ev(0),rw=ev(S.w);
+  const ws=[0,0.25,0.5,0.7,0.8,0.9,1];
+  if(!ws.includes(S.w)){ws.push(S.w);ws.sort((a,b)=>a-b);}
+  const grid=ws.map(w=>{const r=ev(w);return{w,r,dm:mse(r.dll),ll:r.nk?r.llMk/r.nk:NaN};});
+  const best=grid.reduce((a,b)=>b.ll<a.ll?b:a),g1=grid.find(g=>g.w==1);
+  const seasons=Object.keys(rw.by).sort();
+  const dm0=mse(r0.dll),dci0=2*dm0.se,rm=mse(rw.ret),roi=rm.m*100,rci=2*rm.se*100,wl=Math.round(S.w*100);
+  const vLL=Math.abs(dm0.m)<=dci0?'różnica w granicach szumu – brak dowodu, że model bije rynek':(dm0.m<0?'model lepszy od rynku poza szumem – sprawdź, czy to się powtarza w każdym sezonie':'model gorszy od rynku poza szumem – sam model nie nadaje się do szukania „value”');
+  const vROI=rw.bets<2?'':(Math.abs(roi)<=rci?'wynik w granicach szumu':(roi>0?'dodatni poza szumem – zweryfikuj na kolejnych sezonach':'ujemny poza szumem'));
+  const verdict=best.w==1?'Najniższy log loss ma sam rynek – dołożenie modelu nie poprawiło wyniku na tych danych.':`Najlepsza waga rynku: ${Math.round(best.w*100)}% (log loss ${f(best.ll,3)} vs ${f(g1.ll,3)} dla samych kursów). To dopasowanie na tych samych danych, więc na przyszłość poprawa będzie zwykle mniejsza.`;
+  $('v').innerHTML=`<div class="card"><div class="teams">Sam model vs rynek – ${seasons.length} sezon(y), ${r0.n} meczów</div>
   <p class="mut" style="margin-top:0">Każdy mecz przewidziany wyłącznie na podstawie meczów rozegranych przed nim (min. 100 wcześniejszych). Benchmark: kursy zamknięcia rynku bez marży.</p>
   <table><tr><th></th><th>Model</th><th>Rynek</th></tr>
-  <tr><td>Mecze z kursami</td><td>${r.nk}</td><td>${r.nk}</td></tr>
-  <tr><td>Log loss ↓</td><td>${r.nk?f(r.llMk/r.nk,3):'–'}</td><td>${r.nk?f(r.llK/r.nk,3):'–'}</td></tr>
-  <tr><td>Brier ↓</td><td>${f(r.brM/r.n,3)}</td><td>${r.nk?f(r.brK/r.nk,3):'–'}</td></tr>
-  <tr><td>Trafność typu</td><td>${pc(r.hitM/r.n)}</td><td>${r.nk?pc(r.hitK/r.nk):'–'}</td></tr></table>
-  <div class="sub"><b>Różnica log loss (model − rynek): ${dm.m>=0?'+':''}${f(dm.m,3)} ± ${f(dci,3)}</b> (±2 błędy std.)<br>${vLL}.</div></div>
-  <div class="card"><div class="teams">Wg sezonów</div>
-  <table><tr><th>Sezon</th><th>Mecze</th><th>LL model</th><th>LL rynek</th><th>ROI</th></tr>
-  ${seasons.map(k=>{const B=r.by[k];return `<tr><td>${k}</td><td>${B.n}</td><td>${B.nk?f(B.llMk/B.nk,3):'–'}</td><td>${B.nk?f(B.llK/B.nk,3):'–'}</td><td>${B.bets?sg(B.pl/B.bets*100)+'%':'–'}</td></tr>`;}).join('')}</table></div>
-  <div class="card"><div class="teams">Symulacja value (edge ≥ ${S.thr}%, stawka 1)</div>
-  <table><tr><td>Zakładów</td><td>${r.bets}</td></tr><tr><td>Bilans</td><td>${r.pl>=0?'+':''}${f(r.pl,1)}</td></tr>
-  <tr><td>ROI</td><td>${r.bets?sg(roi)+'% ± '+f(rci,1)+' p.p.':'–'}</td></tr></table>
-  <div class="sub">${vROI?vROI+'.':''}</div>
+  <tr><td>Mecze z kursami</td><td>${r0.nk}</td><td>${r0.nk}</td></tr>
+  <tr><td>Log loss ↓</td><td>${r0.nk?f(r0.llMk/r0.nk,3):'–'}</td><td>${r0.nk?f(r0.llK/r0.nk,3):'–'}</td></tr>
+  <tr><td>Brier ↓</td><td>${f(r0.brM/r0.n,3)}</td><td>${r0.nk?f(r0.brK/r0.nk,3):'–'}</td></tr>
+  <tr><td>Trafność typu</td><td>${pc(r0.hitM/r0.n)}</td><td>${r0.nk?pc(r0.hitK/r0.nk):'–'}</td></tr></table>
+  <div class="sub"><b>Różnica log loss (model − rynek): ${dm0.m>=0?'+':''}${f(dm0.m,3)} ± ${f(dci0,3)}</b> (±2 błędy std.)<br>${vLL}.</div></div>
+  <div class="card"><div class="teams">Miks modelu z rynkiem</div>
+  <p class="mut" style="margin-top:0">Szacunek = w × rynek + (1 − w) × model. Rynek to kursy, po których byś obstawiał (sprzed zamknięcia), porównanie z kursami zamknięcia. Przy wadze 100% wynik jest więc nieco gorszy od zamknięcia.</p>
+  <table><tr><th>Waga rynku</th><th>Log loss</th><th>Różn. vs zamkn.</th><th>Zakł.</th><th>ROI</th></tr>
+  ${grid.map(g=>`<tr><td>${Math.round(g.w*100)}%${g.w==best.w?' ★':''}${g.w==S.w?' ◀':''}</td><td>${f(g.ll,3)}</td><td>${g.dm.m>=0?'+':''}${f(g.dm.m,3)} ± ${f(2*g.dm.se,3)}</td><td>${g.r.bets}</td><td>${g.r.bets?sg(g.r.pl/g.r.bets*100)+'%':'–'}</td></tr>`).join('')}</table>
+  <div class="sub">★ najniższy log loss · ◀ ustawiona waga. ${verdict}</div>
+  ${best.w!=S.w?`<p><button class="p" id="bw">Ustaw wagę ${Math.round(best.w*100)}%</button></p>`:''}</div>
+  <div class="card"><div class="teams">Wg sezonów (waga rynku ${wl}%)</div>
+  <table><tr><th>Sezon</th><th>Mecze</th><th>LL miks</th><th>LL rynek</th><th>ROI</th></tr>
+  ${seasons.map(k=>{const B=rw.by[k];return `<tr><td>${k}</td><td>${B.n}</td><td>${B.nk?f(B.llMk/B.nk,3):'–'}</td><td>${B.nk?f(B.llK/B.nk,3):'–'}</td><td>${B.bets?sg(B.pl/B.bets*100)+'%':'–'}</td></tr>`;}).join('')}</table></div>
+  <div class="card"><div class="teams">Symulacja zakładów (waga rynku ${wl}%, edge ≥ ${S.thr}%, stawka 1)</div>
+  <table><tr><td>Zakładów</td><td>${rw.bets}</td></tr><tr><td>Bilans</td><td>${rw.pl>=0?'+':''}${f(rw.pl,1)}</td></tr>
+  <tr><td>ROI</td><td>${rw.bets?sg(roi)+'% ± '+f(rci,1)+' p.p.':'–'}</td></tr></table>
+  <div class="sub">${vROI?vROI+'.':''} Przy wysokiej wadze rynku zakładów jest mało, bo edge względem własnych kursów rzadko przekracza próg.</div>
   <div class="teams" style="margin-top:12px">ROI wg kursu typu</div>
   <table><tr><th>Przedział</th><th>Zakładów</th><th>ROI</th></tr>
-  ${r.bk.map(b=>`<tr><td>${b.l}</td><td>${b.n}</td><td>${b.n?sg(b.pl/b.n*100)+'%':'–'}</td></tr>`).join('')}</table>
-  <div class="sub">Jeśli cały zysk siedzi w kursach &gt; 3,5, to zwykle kilka trafionych outsiderów, a nie przewaga modelu. Kursy z pliku to średnia rynku sprzed zamknięcia, bez uwzględnienia limitów stawek i ruchu kursu.</div></div>`;
+  ${rw.bk.map(b=>`<tr><td>${b.l}</td><td>${b.n}</td><td>${b.n?sg(b.pl/b.n*100)+'%':'–'}</td></tr>`).join('')}</table>
+  <div class="sub">Jeśli cały zysk siedzi w kursach &gt; 3,5, to zwykle kilka trafionych outsiderów, a nie przewaga modelu. Kursy z pliku to średnia rynku sprzed zamknięcia, bez limitów stawek i ruchu kursu.</div></div>`;
+  const bw=$('bw');if(bw)bw.onclick=()=>{S.w=best.w;save();bt(d);};
 }
 
 function settings(){
   $('v').innerHTML=`<div class="card"><label>Proxy CORS (prefiks, URL doklejany na końcu)</label><input id="sp" value="${esc(S.proxy)}" placeholder="https://twoj-worker.workers.dev/?url=">
   <label><input type="checkbox" id="spo" ${S.proxyOnly?'checked':''} style="width:auto"> Zawsze używaj proxy (pomiń próbę bezpośrednią)</label>
-  <div class="g2"><div><label>Okres połowicznego zaniku wagi (dni)</label><input id="sh" type="number" value="${S.half}"></div><div><label>Próg value (edge, %)</label><input id="st" type="number" step="0.5" value="${S.thr}"></div></div>
+  <div class="g2"><div><label>Waga rynku w miksie (0–1)</label><input id="sw" inputmode="decimal" value="${S.w}"></div><div><label>Podświetl różnicę z rynkiem od (p.p.)</label><input id="sdp" type="number" step="1" value="${S.thrPP}"></div></div>
+  <div class="g2"><div><label>Okres połowicznego zaniku wagi (dni)</label><input id="sh" type="number" value="${S.half}"></div><div><label>Próg edge w symulacji backtestu (%)</label><input id="st" type="number" step="0.5" value="${S.thr}"></div></div>
   <p><button class="p" id="ss">Zapisz</button> <span id="sm" class="mut"></span></p></div>
   <div class="card"><div class="teams">Wgraj CSV ręcznie</div><p class="mut" style="margin-top:0">Gdy proxy nie działa: pobierz pliki z football-data.co.uk (sezon + fixtures.csv) i wskaż je tutaj. Mecze z wynikiem trafiają do modelu, bez wyniku – do listy nadchodzących.</p>
   <input type="file" id="sf" accept=".csv" multiple><p class="mut" id="sfm"></p>${mem.manual?'<button id="sx">Wróć do pobierania z sieci</button>':''}</div>`;
-  $('ss').onclick=()=>{S.proxy=$('sp').value.trim();S.proxyOnly=$('spo').checked;S.half=Math.max(30,+$('sh').value||180);S.thr=+$('st').value||5;save();D=null;$('sm').textContent='Zapisano';};
+  $('ss').onclick=()=>{
+    S.proxy=$('sp').value.trim();S.proxyOnly=$('spo').checked;
+    const w=parseFloat($('sw').value.replace(',','.'));S.w=isFinite(w)?Math.min(1,Math.max(0,w)):DEF.w;
+    S.thrPP=Math.max(1,+$('sdp').value||DEF.thrPP);
+    S.half=Math.max(30,+$('sh').value||DEF.half);S.thr=+$('st').value||DEF.thr;
+    save();D=null;$('sm').textContent='Zapisano';
+  };
   $('sf').onchange=async e=>{
     let all=[];for(const f of e.target.files)all.push(...toMatches(await f.text()));
     mem.manual=all;D=null;$('sfm').textContent=`Wczytano ${all.length} wierszy.`;
