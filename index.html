@@ -79,6 +79,7 @@ function pDate(s,tm){
   return new Date(Date.UTC(y,+m[2]-1,+m[1],+(p[0]||12),+(p[1]||0)));
 }
 const num=x=>{const v=parseFloat(x);return isFinite(v)?v:null;};
+const sx=(S_,T_)=>{const a=num(S_),b=num(T_);return a===null||b===null?null:b+0.15*Math.max(0,a-b);};
 function norm(r){
   const d=pDate(r.Date,r.Time);if(!d||!r.HomeTeam||!r.AwayTeam)return null;
   const o=(a,b,c)=>{const x=[num(r[a]),num(r[b]),num(r[c])];return x.every(v=>v!==null&&v>1)?x:null;};
@@ -86,29 +87,38 @@ function norm(r){
     avg:o('AvgH','AvgD','AvgA')||o('B365H','B365D','B365A'),
     avgc:o('AvgCH','AvgCD','AvgCA')||o('PSCH','PSCD','PSCA'),
     max:o('MaxH','MaxD','MaxA'),
+    xh:sx(r.HS,r.HST),xa:sx(r.AS,r.AST),
     ov:num(r['Avg>2.5'])||num(r['B365>2.5']),un:num(r['Avg<2.5'])||num(r['B365<2.5'])};
 }
-function ratings(ms,asOf,half){
-  let sw=0,sh=0,sa=0,nm=0;const T={};
+function ratings(ms,asOf,half,lam=1){
+  let sw=0,sh=0,sa=0,nm=0,gS=0,xS=0;const um=[],uw=[];
   for(const m of ms){
     if(m.hg===null||m.d>=asOf)continue;
     const w=Math.pow(0.5,((asOf-m.d)/864e5)/half);
-    sw+=w;nm++;sh+=w*m.hg;sa+=w*m.ag;
-    const H=T[m.h]||(T[m.h]={gf:0,ga:0,w:0}),A=T[m.a]||(T[m.a]={gf:0,ga:0,w:0});
-    H.gf+=w*m.hg;H.ga+=w*m.ag;H.w+=w;A.gf+=w*m.ag;A.ga+=w*m.hg;A.w+=w;
+    sw+=w;nm++;sh+=w*m.hg;sa+=w*m.ag;um.push(m);uw.push(w);
+    if(lam<1&&m.xh!=null&&m.xa!=null){gS+=w*(m.hg+m.ag);xS+=w*(m.xh+m.xa);}
   }
   if(sw<5)return null;
-  const hAvg=sh/sw,aAvg=sa/sw,mu=(hAvg+aAvg)/2,h=Math.sqrt(hAvg/aAvg),K=6;
-  for(const t in T){T[t].att=((T[t].gf+K*mu)/(T[t].w+K))/mu;T[t].def=((T[t].ga+K*mu)/(T[t].w+K))/mu;}
+  const sc=xS>0?gS/xS:1,T={};let sp=0;
+  for(let k=0;k<um.length;k++){
+    const m=um[k],w=uw[k];let ph=m.hg,pa=m.ag;
+    if(lam<1&&m.xh!=null&&m.xa!=null){ph=lam*m.hg+(1-lam)*sc*m.xh;pa=lam*m.ag+(1-lam)*sc*m.xa;}
+    sp+=w*(ph+pa);
+    const H=T[m.h]||(T[m.h]={gf:0,ga:0,w:0}),A=T[m.a]||(T[m.a]={gf:0,ga:0,w:0});
+    H.gf+=w*ph;H.ga+=w*pa;H.w+=w;A.gf+=w*pa;A.ga+=w*ph;A.w+=w;
+  }
+  const hAvg=sh/sw,aAvg=sa/sw,mu=(hAvg+aAvg)/2,h=Math.sqrt(hAvg/aAvg),K=6,muP=sp/(2*sw);
+  for(const t in T){T[t].att=((T[t].gf+K*muP)/(T[t].w+K))/muP;T[t].def=((T[t].ga+K*muP)/(T[t].w+K))/muP;}
   return {T,mu,h,hAvg,aAvg,nm};
 }
 function pmf(l,n=10){const p=[Math.exp(-l)];for(let k=1;k<=n;k++)p.push(p[k-1]*l/k);return p;}
-function predict(R,h,a){
+function predict(R,h,a,rho=0){
   const th=R.T[h]||{att:1,def:1},ta=R.T[a]||{att:1,def:1};
   const lh=R.mu*R.h*th.att*ta.def,la=R.mu/R.h*ta.att*th.def;
   const ph=pmf(lh),pa=pmf(la);let H=0,D=0,A=0,o=0,b=0,tot=0;const sc=[];
+  const tau=(i,j)=>{if(!rho)return 1;let t=1;if(i==0&&j==0)t=1-lh*la*rho;else if(i==0&&j==1)t=1+lh*rho;else if(i==1&&j==0)t=1+la*rho;else if(i==1&&j==1)t=1-rho;return Math.max(t,0);};
   for(let i=0;i<=10;i++)for(let j=0;j<=10;j++){
-    const p=ph[i]*pa[j];tot+=p;
+    const p=ph[i]*pa[j]*tau(i,j);tot+=p;
     if(i>j)H+=p;else if(i==j)D+=p;else A+=p;
     if(i+j>2)o+=p;if(i>0&&j>0)b+=p;sc.push([i,j,p]);
   }
@@ -117,13 +127,13 @@ function predict(R,h,a){
 }
 const imp=o=>{const q=o.map(x=>1/x),s=q[0]+q[1]+q[2];return q.map(x=>x/s);};
 const mse=a=>{const n=a.length;if(n<2)return{m:0,se:0,n};const m=a.reduce((x,y)=>x+y,0)/n;const v=a.reduce((x,y)=>x+(y-m)*(y-m),0)/(n-1);return{m,se:Math.sqrt(v/n),n};};
-function btRecords(ms,from,half,minPrior=100){
+function btRecords(ms,from,half,minPrior=100,lam=1,rho=0){
   const cur=ms.filter(m=>m.d>=from&&m.hg!==null).sort((a,b)=>a.d-b.d);
   const out=[];
   const sl=m=>{const y=m.d.getUTCFullYear(),s=m.d.getUTCMonth()>=6?y:y-1;return s+'/'+pad((s+1)%100);};
   for(const m of cur){
-    const R=ratings(ms,m.d,half);if(!R||R.nm<minPrior)continue;
-    const p=predict(R,m.h,m.a),y=m.hg>m.ag?0:m.hg==m.ag?1:2;
+    const R=ratings(ms,m.d,half,lam);if(!R||R.nm<minPrior)continue;
+    const p=predict(R,m.h,m.a,rho),y=m.hg>m.ag?0:m.hg==m.ag?1:2;
     const ob=m.avg||m.avgc,oc=m.avgc||m.avg;
     out.push({k:sl(m),P:[p.pH,p.pD,p.pA],y,ob:ob||null,Qb:ob?imp(ob):null,Qc:oc?imp(oc):null});
   }
@@ -145,18 +155,19 @@ function btEval(recs,w,thr){
   }
   return r;
 }
-function backtest(ms,from,half,thr,minPrior=100,w=0){return btEval(btRecords(ms,from,half,minPrior),w,thr);}
+function backtest(ms,from,half,thr,minPrior=100,w=0,lam=1,rho=0){return btEval(btRecords(ms,from,half,minPrior,lam,rho),w,thr);}
 //CORE_END
 
 /* ---------- UI ---------- */
 const LG={E0:'Anglia – Premier League',E1:'Anglia – Championship',E2:'Anglia – League One',E3:'Anglia – League Two',SC0:'Szkocja – Premiership',D1:'Niemcy – Bundesliga',D2:'Niemcy – 2. Bundesliga',I1:'Włochy – Serie A',I2:'Włochy – Serie B',SP1:'Hiszpania – La Liga',SP2:'Hiszpania – La Liga 2',F1:'Francja – Ligue 1',F2:'Francja – Ligue 2',N1:'Holandia – Eredivisie',B1:'Belgia – Pro League',P1:'Portugalia – Liga',T1:'Turcja – Süper Lig',G1:'Grecja – Super League'};
 const BASE='https://www.football-data.co.uk/';
-const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,proxyOnly:false,div:'E0'};
+const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,lam:1,rho:0,proxyOnly:false,div:'E0'};
 let S=Object.assign({},DEF);
 try{Object.assign(S,JSON.parse(localStorage.getItem('typer')||'{}'));}catch(e){}
 const save=()=>{try{localStorage.setItem('typer',JSON.stringify(S));}catch(e){}};
 let tab='fx',sortBy='date',busy=false,msg='';
-const mem={txt:{},manual:null};
+const mem={txt:{},manual:null,tune:null};
+const pr=(R,h,a)=>predict(R,h,a,S.rho);
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pc=x=>(x*100).toFixed(0)+'%';
@@ -206,7 +217,7 @@ let D=null; // {div,res,fx,R}
 async function ensure(){
   if(D&&D.div==S.div)return D;
   const d=await loadLeague(S.div);
-  const R=ratings(d.res,new Date(Date.now()+864e5),S.half);
+  const R=ratings(d.res,new Date(Date.now()+864e5),S.half,S.lam);
   D={div:S.div,res:d.res,fx:d.fx.sort((a,b)=>a.d-b.d),R};
   return D;
 }
@@ -227,7 +238,7 @@ function mixLine(P,Q,odds){
 }
 
 function card(f,R){
-  const p=predict(R,f.h,f.a),P=[p.pH,p.pD,p.pA],Q=f.avg?imp(f.avg):null;
+  const p=pr(R,f.h,f.a),P=[p.pH,p.pD,p.pA],Q=f.avg?imp(f.avg):null;
   const dt=f.d.toLocaleString('pl-PL',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Warsaw'});
   let ou;
   if(f.ov&&f.un){const qo=(1/f.ov)/(1/f.ov+1/f.un);ou=` · Over 2.5: model ${pc(p.o25)}, rynek ${pc(qo)} (kurs ${f.ov.toFixed(2)})`;}
@@ -252,7 +263,7 @@ async function view(){
 
 function fixtures(d){
   let fx=d.fx.slice();
-  const dif=f=>maxDiff(predict(d.R,f.h,f.a),f.avg?imp(f.avg):null);
+  const dif=f=>maxDiff(pr(d.R,f.h,f.a),f.avg?imp(f.avg):null);
   if(sortBy=='diff')fx.sort((a,b)=>dif(b)-dif(a));
   const nHi=fx.filter(f=>dif(f)>=S.thrPP).length;
   $('v').innerHTML=`<div class="chips"><button data-s="date" class="${sortBy=='date'?'on':''}">Wg daty</button><button data-s="diff" class="${sortBy=='diff'?'on':''}">Wg różnicy z rynkiem</button></div>
@@ -271,7 +282,7 @@ function custom(d){
   const go=()=>{
     const h=$('ch').value,a=$('ca').value;
     if(h==a){$('co').innerHTML='<p class="mut">Wybierz dwie różne drużyny.</p>';return;}
-    const p=predict(d.R,h,a),P=[p.pH,p.pD,p.pA],o=[1,2,3].map(i=>num($('o'+i).value.replace(',','.')));
+    const p=pr(d.R,h,a),P=[p.pH,p.pD,p.pA],o=[1,2,3].map(i=>num($('o'+i).value.replace(',','.')));
     const odds=o.every(x=>x&&x>1)?o:null,Q=odds?imp(odds):null;
     const warn=maxDiff(p,Q)>=S.thrPP?`<div class="sub warn">⚠ Duża różnica z rynkiem (≥ ${S.thrPP} p.p.) – sprawdź skład, kontuzje i rotację przed decyzją.</div>`:'';
     $('co').innerHTML=`<div class="card"><div class="hd"><span>Teren: ${esc(h)}</span><span>xG ${p.lh.toFixed(2)} : ${p.la.toFixed(2)}</span></div>${rowsHtml(P,odds,Q)}
@@ -280,12 +291,38 @@ function custom(d){
   ['ch','ca','o1','o2','o3'].forEach(id=>$(id).oninput=go);go();
 }
 
+async function runTune(ms,from){
+  const halves=[90,180,365,730],lams=[1,0.5,0],rows=[];
+  const mk=(hf,lm,rho)=>{const r=btEval(btRecords(ms,from,hf,100,lm,rho),0,0);return{half:hf,lam:lm,rho,ll:r.llMk/r.nk,dm:mse(r.dll),n:r.nk};};
+  const wait=()=>new Promise(r=>setTimeout(r,20));
+  for(const hf of halves)for(const lm of lams){
+    $('tune').innerHTML=`<p class="mut">Liczę… ${rows.length+1}/${halves.length*lams.length+4}</p>`;await wait();
+    rows.push(mk(hf,lm,0));
+  }
+  const b1=rows.reduce((a,b)=>b.ll<a.ll?b:a),rrows=[];
+  for(const rho of [0,-0.05,-0.1,-0.15]){
+    $('tune').innerHTML=`<p class="mut">Liczę… ${rows.length+rrows.length+1}/${halves.length*lams.length+4}</p>`;await wait();
+    rrows.push(rho==0?b1:mk(b1.half,b1.lam,rho));
+  }
+  return {rows,rrows,b1,best:rrows.reduce((a,b)=>b.ll<a.ll?b:a)};
+}
+function tuneHtml(t){
+  const f=(x,n)=>x.toFixed(n),g=x=>(x>=0?'+':'')+x.toFixed(3);
+  const lab=l=>l==1?'tylko gole':l==0?'tylko strzały':Math.round(l*100)+'% gole';
+  const cur=t.rows.find(r=>r.half==S.half&&r.lam==S.lam),b=t.best,ci=2*b.dm.se,noise=Math.abs(b.dm.m)<=ci;
+  return `<table><tr><th>Półokres</th><th>Oceny z</th><th>Log loss</th><th>Różn. vs rynek</th></tr>`+
+  t.rows.map(r=>`<tr><td>${r.half} dni${r===t.b1?' ★':''}</td><td>${lab(r.lam)}</td><td>${f(r.ll,3)}</td><td>${g(r.dm.m)} ± ${f(2*r.dm.se,3)}</td></tr>`).join('')+
+  `</table><div class="teams" style="margin-top:12px">Korekta Dixon-Coles (dla ★ powyżej)</div><table><tr><th>ρ</th><th>Log loss</th><th>Różn. vs rynek</th></tr>`+
+  t.rrows.map(r=>`<tr><td>${f(r.rho,2)}${r===t.best?' ★':''}</td><td>${f(r.ll,3)}</td><td>${g(r.dm.m)} ± ${f(2*r.dm.se,3)}</td></tr>`).join('')+
+  `</table><div class="sub">Najlepsze: półokres ${b.half} dni, oceny z: ${lab(b.lam)}, ρ = ${f(b.rho,2)}. Log loss ${f(b.ll,3)}${cur?` (obecne ustawienia: ${f(cur.ll,3)})`:''}. Różnica vs rynek ${g(b.dm.m)} ± ${f(ci,3)} – ${noise?'w granicach szumu, czyli model nie różni się istotnie od rynku':(b.dm.m<0?'lepszy od rynku poza szumem – sprawdź, czy to się powtarza w każdym sezonie':'nadal gorszy od rynku poza szumem')}. To dopasowanie na tych samych danych (${t.rows.length+t.rrows.length-1} kombinacji), więc realna poprawa będzie mniejsza.</div><p><button class="p" id="ta">Zastosuj najlepsze ustawienia</button></p>`;
+}
+
 async function bt(d){
   $('v').innerHTML='<p class="mut">Ładowanie historii sezonów…</p>';
   const ms=await loadHist(d);
   if(tab!='bt')return;
   const now=new Date(),yr=now.getUTCMonth()>=6?now.getUTCFullYear():now.getUTCFullYear()-1;
-  const recs=btRecords(ms,new Date(Date.UTC(yr-5,6,1)),S.half,100);
+  const from=new Date(Date.UTC(yr-5,6,1)),recs=btRecords(ms,from,S.half,100,S.lam,S.rho);
   if(!recs.length){$('v').innerHTML='<p class="mut">Za mało danych do backtestu.</p>';return;}
   const f=(x,n)=>x.toFixed(n),sg=x=>(x>=0?'+':'')+x.toFixed(1),thr=S.thr/100;
   const ev=w=>btEval(recs,w,thr);
@@ -323,8 +360,17 @@ async function bt(d){
   <div class="teams" style="margin-top:12px">ROI wg kursu typu</div>
   <table><tr><th>Przedział</th><th>Zakładów</th><th>ROI</th></tr>
   ${rw.bk.map(b=>`<tr><td>${b.l}</td><td>${b.n}</td><td>${b.n?sg(b.pl/b.n*100)+'%':'–'}</td></tr>`).join('')}</table>
-  <div class="sub">Jeśli cały zysk siedzi w kursach &gt; 3,5, to zwykle kilka trafionych outsiderów, a nie przewaga modelu. Kursy z pliku to średnia rynku sprzed zamknięcia, bez limitów stawek i ruchu kursu.</div></div>`;
+  <div class="sub">Jeśli cały zysk siedzi w kursach &gt; 3,5, to zwykle kilka trafionych outsiderów, a nie przewaga modelu. Kursy z pliku to średnia rynku sprzed zamknięcia, bez limitów stawek i ruchu kursu.</div></div>
+  <div class="card"><div class="teams">Strojenie modelu</div>
+  <p class="mut" style="margin-top:0">Sprawdza okres zaniku wagi meczów, udział strzałów (zamiast samych goli) w ocenie drużyn oraz korektę Dixon-Coles. Liczy się kilka sekund. Obecnie: półokres ${S.half} dni, udział goli ${S.lam}, ρ = ${S.rho}.</p>
+  <div id="tune">${mem.tune?tuneHtml(mem.tune):''}</div><p><button class="p" id="tb">Uruchom strojenie</button></p></div>`;
   const bw=$('bw');if(bw)bw.onclick=()=>{S.w=best.w;save();bt(d);};
+  const bindTune=()=>{const ta=$('ta');if(ta)ta.onclick=()=>{const b=mem.tune.best;S.half=b.half;S.lam=b.lam;S.rho=b.rho;save();D=null;mem.tune=null;view();};};
+  bindTune();
+  $('tb').onclick=async()=>{const tb=$('tb');tb.disabled=true;
+    try{mem.tune=await runTune(ms,from);$('tune').innerHTML=tuneHtml(mem.tune);bindTune();}
+    catch(e){$('tune').innerHTML='<p class="err">Błąd strojenia: '+esc(e.message)+'</p>';}
+    tb.disabled=false;};
 }
 
 function settings(){
@@ -332,6 +378,7 @@ function settings(){
   <label><input type="checkbox" id="spo" ${S.proxyOnly?'checked':''} style="width:auto"> Zawsze używaj proxy (pomiń próbę bezpośrednią)</label>
   <div class="g2"><div><label>Waga rynku w miksie (0–1)</label><input id="sw" inputmode="decimal" value="${S.w}"></div><div><label>Podświetl różnicę z rynkiem od (p.p.)</label><input id="sdp" type="number" step="1" value="${S.thrPP}"></div></div>
   <div class="g2"><div><label>Okres połowicznego zaniku wagi (dni)</label><input id="sh" type="number" value="${S.half}"></div><div><label>Próg edge w symulacji backtestu (%)</label><input id="st" type="number" step="0.5" value="${S.thr}"></div></div>
+  <div class="g2"><div><label>Udział goli w ocenie drużyn (1 = tylko gole, 0 = tylko strzały)</label><input id="sl" inputmode="decimal" value="${S.lam}"></div><div><label>Korekta Dixon-Coles ρ (0 do −0,2)</label><input id="sr" inputmode="decimal" value="${S.rho}"></div></div>
   <p><button class="p" id="ss">Zapisz</button> <span id="sm" class="mut"></span></p></div>
   <div class="card"><div class="teams">Wgraj CSV ręcznie</div><p class="mut" style="margin-top:0">Gdy proxy nie działa: pobierz pliki z football-data.co.uk (sezon + fixtures.csv) i wskaż je tutaj. Mecze z wynikiem trafiają do modelu, bez wyniku – do listy nadchodzących.</p>
   <input type="file" id="sf" accept=".csv" multiple><p class="mut" id="sfm"></p>${mem.manual?'<button id="sx">Wróć do pobierania z sieci</button>':''}</div>`;
@@ -340,6 +387,9 @@ function settings(){
     const w=parseFloat($('sw').value.replace(',','.'));S.w=isFinite(w)?Math.min(1,Math.max(0,w)):DEF.w;
     S.thrPP=Math.max(1,+$('sdp').value||DEF.thrPP);
     S.half=Math.max(30,+$('sh').value||DEF.half);S.thr=+$('st').value||DEF.thr;
+    const lm=parseFloat($('sl').value.replace(',','.'));S.lam=isFinite(lm)?Math.min(1,Math.max(0,lm)):DEF.lam;
+    const rh=parseFloat($('sr').value.replace(',','.'));S.rho=isFinite(rh)?Math.min(0,Math.max(-0.3,rh)):DEF.rho;
+    mem.tune=null;
     save();D=null;$('sm').textContent='Zapisano';
   };
   $('sf').onchange=async e=>{
