@@ -63,7 +63,7 @@ td:first-child,th:first-child{text-align:left}
 <main id="v"></main>
 <nav id="nav">
   <button data-t="fx" class="on">Mecze</button>
-  <button data-t="bs">BTTS</button>
+  <button data-t="bs">Typy</button>
   <button data-t="cu">Własny</button>
   <button data-t="bt">Backtest</button>
   <button data-t="st">Ustawienia</button>
@@ -215,7 +215,7 @@ function bttsEval(recs,a,thr){
 /* ---------- UI ---------- */
 const LG={E0:'Anglia – Premier League',E1:'Anglia – Championship',E2:'Anglia – League One',E3:'Anglia – League Two',SC0:'Szkocja – Premiership',D1:'Niemcy – Bundesliga',D2:'Niemcy – 2. Bundesliga',I1:'Włochy – Serie A',I2:'Włochy – Serie B',SP1:'Hiszpania – La Liga',SP2:'Hiszpania – La Liga 2',F1:'Francja – Ligue 1',F2:'Francja – Ligue 2',N1:'Holandia – Eredivisie',B1:'Belgia – Pro League',P1:'Portugalia – Liga',T1:'Turcja – Süper Lig',G1:'Grecja – Super League'};
 const BASE='https://www.football-data.co.uk/';
-const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,lam:1,rho:0,bk:'STS',ba:0.5,tipThr:55,proxyOnly:false,div:'E0'};
+const DEF={proxy:'https://gentle-fire-cbb1.nicwaznego2011.workers.dev/?url=',half:180,thr:5,thrPP:8,w:0.8,lam:1,rho:0,bk:'STS',ba:0.5,tipThr:55,minOdds:2,proxyOnly:false,div:'E0'};
 let S=Object.assign({},DEF);
 try{Object.assign(S,JSON.parse(localStorage.getItem('typer')||'{}'));}catch(e){}
 const save=()=>{try{localStorage.setItem('typer',JSON.stringify(S));}catch(e){}};
@@ -503,16 +503,49 @@ function bsBack(ms){
   <div class="sub">Jeśli „faktycznie" jest blisko „średnio", szacunki są dobrze skalibrowane. Trafność typu nie mówi o opłacalności, bo zależy od kursu.</div></div>`;
   return {html,best};
 }
+function oddsListHtml(d){
+  const mo=S.minOdds,rows=[];
+  d.fx.forEach(f=>{
+    if(!f.avg)return;
+    const p=pr(d.R,f.h,f.a),P=blend([p.pH,p.pD,p.pA],imp(f.avg),S.w);
+    let bi=-1;P.forEach((x,i)=>{if(f.avg[i]>=mo&&(bi<0||x>P[bi]))bi=i;});
+    if(bi>=0)rows.push({f,i:bi,p:P[bi],o:f.avg[bi],ev:P[bi]*f.avg[bi]-1});
+  });
+  rows.sort((a,b)=>b.p-a.p);
+  const top=rows.slice(0,10),short=f=>f.d.toLocaleString('pl-PL',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Warsaw'});
+  const lab=r=>r.i==0?esc(r.f.h)+' wygra':r.i==1?'Remis':esc(r.f.a)+' wygra',g=x=>(x>=0?'+':'')+(x*100).toFixed(0)+'%';
+  return top.length?`<table><tr><th>Mecz</th><th>Typ</th><th>Kurs śr.</th><th>Szansa</th><th>EV</th></tr>${top.map(r=>`<tr><td>${esc(r.f.h)} – ${esc(r.f.a)}<div class="sub" style="margin:0">${short(r.f)}</div></td><td>${lab(r)}</td><td>${r.o.toFixed(2)}</td><td><b>${pc(r.p)}</b></td><td>${g(r.ev)}</td></tr>`).join('')}</table>`:'<p class="mut" style="margin:0">Brak typów z kursem od tego progu.</p>';
+}
+function typyHtml(d){
+  const thr=S.tipThr/100,short=f=>f.d.toLocaleString('pl-PL',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Warsaw'});
+  const it=d.fx.map(f=>{
+    const p=pr(d.R,f.h,f.a),pk=bttsMarket(f.avg,f.ov,f.un,p.lh,p.la),pb=pk===null?p.btts:(1-S.ba)*p.btts+S.ba*pk;
+    const Q=f.avg?imp(f.avg):null,P=blend([p.pH,p.pD,p.pA],Q,S.w),wi=P.indexOf(Math.max(...P));
+    return {f,pb,side:pb>=0.5?'TAK':'NIE',conf:Math.max(pb,1-pb),P,wi};
+  });
+  const b=it.filter(x=>x.conf>=thr).sort((a,c)=>c.conf-a.conf).slice(0,10);
+  const w=it.slice().sort((a,c)=>c.P[c.wi]-a.P[a.wi]).slice(0,10);
+  const lab=x=>x.wi==0?esc(x.f.h)+' wygra':x.wi==1?'Remis':esc(x.f.a)+' wygra';
+  return `<div class="card"><div class="teams">Obie drużyny strzelą – najpewniejsze typy</div>
+  ${b.length?`<table><tr><th>Mecz</th><th>Typ</th><th>Szansa</th></tr>${b.map(x=>`<tr><td>${esc(x.f.h)} – ${esc(x.f.a)}<div class="sub" style="margin:0">${short(x.f)}</div></td><td><span class="tip ${x.side=='TAK'?'yes':'no'}">${x.side}</span></td><td><b>${pc(x.conf)}</b></td></tr>`).join('')}</table>`:`<p class="mut" style="margin:0">Żaden mecz nie przekracza progu ${S.tipThr}%.</p>`}</div>
+  <div class="card"><div class="teams">Wynik meczu (1X2) – największe szanse</div>
+  ${w.length?`<table><tr><th>Mecz</th><th>Typ</th><th>Szansa</th></tr>${w.map(x=>`<tr><td>${esc(x.f.h)} – ${esc(x.f.a)}<div class="sub" style="margin:0">${short(x.f)}</div></td><td>${lab(x)}</td><td><b>${pc(x.P[x.wi])}</b></td></tr>`).join('')}</table>`:'<p class="mut" style="margin:0">Brak meczów.</p>'}
+  <div class="sub">To szanse, nie pewniaki: przy 65% co trzeci taki typ przegrywa. Dla 1X2 lista to w praktyce faworyci rynku (kursy ważone ${Math.round(S.w*100)}%), bo sam model w teście przegrywał z kursami. Przy niższych kursach faworyta zysk z trafienia jest mały.</div></div>
+  <div class="card"><div class="teams">1X2 z kursem od <input id="mo" inputmode="decimal" value="${S.minOdds}" style="width:70px;display:inline-block;padding:4px 8px"></div>
+  <div id="oddsList">${oddsListHtml(d)}</div>
+  <div class="sub">W każdym meczu wybrany jest typ o największej szansie spośród tych, których kurs jest nie niższy niż próg. Im wyższy kurs, tym z reguły mniejsza szansa, więc to zwykle remisy, wyrównane mecze i niewielcy outsiderzy. Kursy to średnia rynku, nie ${esc(S.bk)}. EV = szansa × kurs − 1 i zwykle wychodzi ujemne, bo to koszt marży. W backteście zakłady „value" miały ujemny ROI we wszystkich sezonach, więc traktuj tę listę jako przegląd, nie źródło zysku.</div></div>`;
+}
 async function btts(d){
   const fx=d.fx;
   $('v').innerHTML=`<p class="mut" style="margin:0 0 6px">${fx.length} nadchodzących meczów · typ, gdy szacunek ≥ ${S.tipThr}% · waga rynku ${Math.round(S.ba*100)}%</p>
   <p class="sub" style="margin:0 0 10px">*Rynek = BTTS wyliczone z kursów 1X2 i Over/Under 2.5 (kursów BTTS nie ma w danych). Typ to strona o większym prawdopodobieństwie, a nie gwarancja. Sprawdź niżej, czy szacunki w ogóle biją średnią ligi.</p>`+
-  (fx.length?fx.map(f=>bttsCard(f,d.R)).join(''):'<p class="mut">Brak nadchodzących meczów w fixtures.csv dla tej ligi.</p>')+
+  (fx.length?typyHtml(d)+'<div class="teams" style="margin:14px 0 8px">Szczegóły meczów (BTTS)</div>'+fx.map(f=>bttsCard(f,d.R)).join(''):'<p class="mut">Brak nadchodzących meczów w fixtures.csv dla tej ligi.</p>')+
   '<div id="bsback"><p class="mut">Ładowanie sprawdzianu historycznego…</p></div><div class="foot">Model statystyczny – nie gwarancja wyniku. Graj odpowiedzialnie.</div>';
   document.querySelectorAll('.mybt').forEach(box=>{
     const ins=[...box.querySelectorAll('input.bi')],k=ins[0].dataset.key,pb=+box.dataset.p;
     ins.forEach(inp=>inp.oninput=()=>{const v=ins.map(x=>x.value);setMy(k,v);box.querySelector('.bires').innerHTML=bttsEv(pb,v);});
   });
+  const mo=$('mo');if(mo)mo.oninput=()=>{const v=parseFloat(mo.value.replace(',','.'));S.minOdds=isFinite(v)?Math.max(1.2,v):DEF.minOdds;save();$('oddsList').innerHTML=oddsListHtml(d);};
   const ms=await loadHist(d);
   if(tab!='bs')return;
   const r=bsBack(ms);
